@@ -65,6 +65,10 @@ var (
 			Background(lipgloss.Color("#ff0")).
 			Foreground(lipgloss.Color("#000"))
 
+	wallStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#622")).
+			Foreground(lipgloss.Color("#a55"))
+
 	cursorStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("#44f")).
 			Foreground(lipgloss.Color("#fff"))
@@ -258,7 +262,8 @@ func (m *GameModel) applyKeystroke(k string) {
 	newState := m.session.State()
 
 	// Ghost trail from old to new cursor.
-	if !m.reducedMotion {
+	// Skip when cursor didn't move (e.g. wall refusal, buffer edge).
+	if !m.reducedMotion && (m.prevCursor.Row != newState.Cursor.Row || m.prevCursor.Col != newState.Cursor.Col) {
 		m.addGhostTrail(m.prevCursor, newState.Cursor)
 	}
 
@@ -430,6 +435,8 @@ func (m GameModel) ViewGame() string {
 			case shaking && atCursor:
 				// Shake: render with waste style.
 				content += wasteBackground.Render(cell)
+			case m.challenge.IsWall(row, col):
+				content += wallStyle.Render(cell)
 			case atCursor:
 				content += cursorStyle.Render(cell)
 			case ghostLife > 0 && !m.reducedMotion:

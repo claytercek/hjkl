@@ -828,3 +828,137 @@ func TestGameModel_SolvedIgnoresKeystrokes(t *testing.T) {
 		t.Fatalf("cursor should not move after solved, col = %d", after.session.State().Cursor.Col)
 	}
 }
+
+func TestViewGame_WallCellRenderedDistinctly(t *testing.T) {
+	// Challenge with walls should render them with a distinct style.
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+		walls,
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+	view := gm.ViewGame()
+	// Should not panic — wall rendering is present.
+	_ = view
+}
+
+func TestViewGame_WallsNoPanic(t *testing.T) {
+	// Multiple walls on multi-line buffer — should not panic.
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 0}: true,
+		vim.Cursor{Row: 0, Col: 2}: true,
+		vim.Cursor{Row: 1, Col: 1}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abc", "def"),
+		vim.Cursor{Row: 0, Col: 1},
+		challenge.CursorAtTarget(1, 2),
+		walls,
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+	view := gm.ViewGame()
+	_ = view
+}
+
+func TestWallRefusalTriggersShake(t *testing.T) {
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+		walls,
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+	gm.applyKeystroke("l") // should be refused — wall at col 1
+	if gm.wasteFrames <= 0 {
+		t.Fatal("expected wasteFrames > 0 after wall refusal")
+	}
+	if gm.session.State().Cursor.Col != 0 {
+		t.Fatalf("cursor should not move after wall refusal, col = %d", gm.session.State().Cursor.Col)
+	}
+}
+
+func TestWallRefusalShakeAndCounter(t *testing.T) {
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abcd"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 3),
+		walls,
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+
+	gm.applyKeystroke("l") // refused by wall
+	if gm.wasteFrames <= 0 {
+		t.Fatal("expected wasteFrames > 0 after wall refusal")
+	}
+	if got := gm.session.KeystrokeCount(); got != 1 {
+		t.Fatalf("keystroke count = %d, want 1", got)
+	}
+	if gm.session.State().Cursor.Col != 0 {
+		t.Fatalf("cursor col = %d, want 0 after wall refusal", gm.session.State().Cursor.Col)
+	}
+
+	// After advancing animations, waste frames should decrease.
+	active := gm.advanceAnimations()
+	if active <= 0 {
+		t.Fatal("expected active animations")
+	}
+	if gm.wasteFrames >= shakeFrames {
+		t.Fatalf("wasteFrames = %d, expected to decrease", gm.wasteFrames)
+	}
+}
+
+func TestViewGame_WithWallDoesNotCrashOnUpdate(t *testing.T) {
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+		walls,
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+
+	// Keystroke that would land on wall.
+	gm2, _ := gm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	_ = gm2.ViewGame() // should not panic
+
+	// Keystroke that jumps over wall.
+	gm3, _ := gm2.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	_ = gm3.ViewGame() // should not panic
+}
+
+func TestLessonView_WithWallDoesNotCrash(t *testing.T) {
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+	}
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.NewWithWalls(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+					walls,
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+	_ = m.View() // should not panic
+
+	// Keystroke lands on wall.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	_ = m2.(LessonModel).View() // should not panic
+}

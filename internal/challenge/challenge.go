@@ -15,6 +15,15 @@ import (
 // GoalPredicate returns true when the given state satisfies the challenge.
 type GoalPredicate func(vim.State) bool
 
+// WallSet marks buffer cells the cursor cannot enter. The zero value (nil)
+// represents no walls. A nil WallSet behaves as an empty set.
+type WallSet map[vim.Cursor]bool
+
+// IsWall reports whether the given position is a wall cell.
+func (w WallSet) IsWall(row, col int) bool {
+	return w[vim.Cursor{Row: row, Col: col}]
+}
+
 // Challenge is the atomic unit of practice.
 type Challenge struct {
 	// InitialBuffer is the buffer the player starts with.
@@ -29,6 +38,18 @@ type Challenge struct {
 	// Par is the optimal (minimum) keystrokes to solve, computed by the
 	// solver. -1 means no solution was found. 0 means unset.
 	Par int
+
+	// Walls marks cells the cursor cannot land on. When a motion would land
+	// on a wall, the cursor stays at its previous position but the keystroke
+	// still counts. Motions that jump over a wall (word, find, line) work
+	// normally as long as their landing cell is clear.
+	Walls WallSet
+}
+
+// IsWall reports whether the given buffer cell is blocked by a wall.
+// Returns false when Walls is nil (the default).
+func (c Challenge) IsWall(row, col int) bool {
+	return c.Walls.IsWall(row, col)
 }
 
 // New returns a Challenge with the given starting state and goal predicate.
@@ -45,6 +66,13 @@ func New(buf vim.Buffer, cursor vim.Cursor, goal GoalPredicate) Challenge {
 func NewWithPar(buf vim.Buffer, cursor vim.Cursor, goal GoalPredicate, par int) Challenge {
 	c := New(buf, cursor, goal)
 	c.Par = par
+	return c
+}
+
+// NewWithWalls is like New but also sets wall cells.
+func NewWithWalls(buf vim.Buffer, cursor vim.Cursor, goal GoalPredicate, walls WallSet) Challenge {
+	c := New(buf, cursor, goal)
+	c.Walls = walls
 	return c
 }
 

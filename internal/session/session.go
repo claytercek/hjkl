@@ -41,6 +41,7 @@ type Result struct {
 type Session struct {
 	state          vim.State
 	goal           challenge.GoalPredicate
+	walls          challenge.WallSet
 	solved         bool
 	keystrokeCount int
 	par            int // -1 = not computed / no solution
@@ -54,6 +55,7 @@ func New(c challenge.Challenge, par int) *Session {
 	return &Session{
 		state:          st,
 		goal:           c.Goal,
+		walls:          c.Walls,
 		solved:         c.Goal(st),
 		keystrokeCount: 0,
 		par:            par,
@@ -62,12 +64,22 @@ func New(c challenge.Challenge, par int) *Session {
 
 // Step applies a single keystroke and checks the goal predicate.
 // If the session is already solved, the keystroke is ignored.
+// If the motion would land on a wall cell, the cursor reverts to its
+// previous position but the keystroke still counts.
 func (s *Session) Step(keystroke string) {
 	if s.solved {
 		return
 	}
 	s.keystrokeCount++
+
+	prevState := s.state
 	s.state = vim.Step(s.state, keystroke)
+
+	// Reject landing on a wall cell.
+	if s.walls.IsWall(s.state.Cursor.Row, s.state.Cursor.Col) {
+		s.state = prevState
+	}
+
 	if s.goal(s.state) {
 		s.solved = true
 	}

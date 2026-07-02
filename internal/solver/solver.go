@@ -54,6 +54,10 @@ func OptimalFromState(st vim.State, c challenge.Challenge, vocabulary []string, 
 	if c.Goal(st) {
 		return 0
 	}
+	// Can't start on a wall.
+	if c.IsWall(st.Cursor.Row, st.Cursor.Col) {
+		return -1
+	}
 
 	visited := map[stateKey]bool{toKey(st): true}
 	queue := []vim.State{st}
@@ -71,6 +75,10 @@ func OptimalFromState(st vim.State, c challenge.Challenge, vocabulary []string, 
 					continue
 				}
 				visited[key] = true
+				// Wall cells are unreachable.
+				if c.IsWall(ns.Cursor.Row, ns.Cursor.Col) {
+					continue
+				}
 				if c.Goal(ns) {
 					return depth
 				}
@@ -96,6 +104,10 @@ func FirstStepFromState(st vim.State, c challenge.Challenge, vocabulary []string
 	if c.Goal(st) {
 		return "", 0
 	}
+	// Can't start on a wall.
+	if c.IsWall(st.Cursor.Row, st.Cursor.Col) {
+		return "", -1
+	}
 
 	visited := map[stateKey]bool{toKey(st): true}
 	queue := []bfsNode{{state: st, firstKey: ""}}
@@ -113,6 +125,11 @@ func FirstStepFromState(st vim.State, c challenge.Challenge, vocabulary []string
 					continue
 				}
 				visited[key] = true
+
+				// Wall cells are unreachable.
+				if c.IsWall(ns.Cursor.Row, ns.Cursor.Col) {
+					continue
+				}
 
 				// Determine the first keystroke from the original start.
 				fk := k

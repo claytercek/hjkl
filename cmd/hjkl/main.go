@@ -14,6 +14,7 @@ import (
 	"github.com/clay/hjkl/internal/solver"
 	"github.com/clay/hjkl/internal/store"
 	"github.com/clay/hjkl/internal/tui"
+	"github.com/clay/hjkl/internal/vim"
 )
 
 func main() {
@@ -21,11 +22,35 @@ func main() {
 
 	gen := challenge.NewGenerator(rng, challenge.SolverFunc(solver.Solve), nil, solver.DefaultMaxDepth)
 
+	// Demo: first round uses hand-placed walls to showcase the mechanic.
+	// "hello world", cursor at col 0, walls at cols 1-4 block "ello ",
+	// target at col 6 (start of "world"). Press 'w' to jump over walls.
+	demoWall := challenge.NewWithWalls(
+		vim.Buffer{Lines: []string{"hello world"}},
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 6),
+		challenge.WallSet{
+			vim.Cursor{Row: 0, Col: 1}: true,
+			vim.Cursor{Row: 0, Col: 2}: true,
+			vim.Cursor{Row: 0, Col: 3}: true,
+			vim.Cursor{Row: 0, Col: 4}: true,
+		},
+	)
+	demoWall.Par = 1 // 'w' is the optimal solution
+
+	// Generate the remaining rounds.
 	lesson, err := curriculum.NewLesson(5, gen, challenge.DefaultConfig())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create lesson: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Prepend the demo round.
+	demoRound := curriculum.Round{
+		Challenge: demoWall,
+		Template:  challenge.THorizontalLine,
+	}
+	lesson.Rounds = append([]curriculum.Round{demoRound}, lesson.Rounds...)
 
 	// Create the store for persisting progress.
 	st, err := store.NewFileStore()

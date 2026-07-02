@@ -9,6 +9,11 @@ import (
 	"github.com/clay/hjkl/internal/vim"
 )
 
+// buffer is a shorthand for creating a Buffer with the given lines.
+func buffer(lines ...string) vim.Buffer {
+	return vim.Buffer{Lines: lines}
+}
+
 func newTestGenerator(seed int64) *challenge.Generator {
 	rng := rand.New(rand.NewSource(seed))
 	return challenge.NewGenerator(rng, challenge.SolverFunc(solver.Solve), challenge.NavigationVocabulary, solver.DefaultMaxDepth)
@@ -268,5 +273,56 @@ func TestCursorAtTarget(t *testing.T) {
 	}
 	if !p(vim.State{Buffer: vim.Buffer{}, Cursor: vim.Cursor{Row: 0, Col: 3}}) {
 		t.Error("predicate should be true for matching position")
+	}
+}
+
+func TestIsWall_NilSet(t *testing.T) {
+	c := challenge.New(buffer("abc"), vim.Cursor{Row: 0, Col: 0}, challenge.CursorAtTarget(0, 2))
+	if c.IsWall(0, 0) {
+		t.Error("IsWall should be false for nil WallSet")
+	}
+	if c.IsWall(0, 5) {
+		t.Error("IsWall should be false for out-of-bounds on nil WallSet")
+	}
+}
+
+func TestIsWall_WithWalls(t *testing.T) {
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+		vim.Cursor{Row: 1, Col: 0}: true,
+	}
+	c := challenge.NewWithWalls(buffer("abc", "def"), vim.Cursor{Row: 0, Col: 0}, challenge.CursorAtTarget(0, 2), walls)
+
+	tests := []struct {
+		row, col int
+		want     bool
+	}{
+		{0, 0, false},
+		{0, 1, true},
+		{0, 2, false},
+		{1, 0, true},
+		{1, 1, false},
+		{2, 0, false}, // row out of range
+	}
+
+	for _, tt := range tests {
+		got := c.IsWall(tt.row, tt.col)
+		if got != tt.want {
+			t.Errorf("IsWall(%d, %d) = %v, want %v", tt.row, tt.col, got, tt.want)
+		}
+	}
+}
+
+func TestWallSet_NilIsWall(t *testing.T) {
+	var w challenge.WallSet // nil
+	if w.IsWall(0, 0) {
+		t.Error("nil WallSet.IsWall should return false")
+	}
+}
+
+func TestWallSet_EmptyIsWall(t *testing.T) {
+	w := make(challenge.WallSet) // empty, non-nil
+	if w.IsWall(0, 0) {
+		t.Error("empty WallSet.IsWall should return false")
 	}
 }

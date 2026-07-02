@@ -234,3 +234,134 @@ func TestSolve_VisitedStateDoesNotRevisit(t *testing.T) {
 		t.Fatalf("Solve = %d, want 2 (ll)", got)
 	}
 }
+
+func TestSolve_RoutesAroundWall(t *testing.T) {
+	// Buffer "abcd", start (0,0), target (0,3). Wall at (0,2).
+	// With only "l" vocabulary, can't reach target because col 2 is blocked.
+	wallC := challenge.NewWithWalls(
+		buffer("abcd"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 3),
+		challenge.WallSet{vim.Cursor{Row: 0, Col: 2}: true},
+	)
+	got := Solve(wallC, []string{"l"}, 100)
+	if got != -1 {
+		t.Fatalf("Solve with wall blocking = %d, want -1 (unsolvable via l alone)", got)
+	}
+}
+
+func TestSolve_RoutesAroundWallMultipleLines(t *testing.T) {
+	// Two-line buffer:
+	//   line 0: "abc"
+	//   line 1: "def"
+	// Start (0,0), target (1,2). Wall at (0,1) and (0,2).
+	// Player must go down to row 1 early, then right.
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+		vim.Cursor{Row: 0, Col: 2}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abc", "def"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(1, 2),
+		walls,
+	)
+	// With "l", "j" — should find path: j (row 1), l (col 1), l (col 2) = 3 steps.
+	got := Solve(c, []string{"l", "j"}, 100)
+	if got != 3 {
+		t.Fatalf("Solve around walls = %d, want 3 (jll)", got)
+	}
+}
+
+func TestSolve_WallBlocksTarget(t *testing.T) {
+	// Target cell is a wall — unsolvable via any character motion.
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 2}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+		walls,
+	)
+	got := Solve(c, []string{"l"}, 100)
+	if got != -1 {
+		t.Fatalf("Solve with target on wall = %d, want -1 (unsolvable)", got)
+	}
+}
+
+func TestSolve_JumpMotionClearsWall(t *testing.T) {
+	// Walls at cols 1-4, but target at col 6 (start of "world").
+	// 'w' should jump from col 0 to col 6, landing clear.
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+		vim.Cursor{Row: 0, Col: 2}: true,
+		vim.Cursor{Row: 0, Col: 3}: true,
+		vim.Cursor{Row: 0, Col: 4}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("hello world"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 6),
+		walls,
+	)
+	got := Solve(c, []string{"w", "l"}, 100)
+	if got != 1 {
+		t.Fatalf("Solve with jump-over-wall = %d, want 1 (w)", got)
+	}
+}
+
+func TestSolve_NoWallNoProblem(t *testing.T) {
+	// Same challenge without walls should solve normally.
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+	)
+	got := Solve(c, []string{"l"}, 100)
+	if got != 2 {
+		t.Fatalf("Solve without walls = %d, want 2", got)
+	}
+}
+
+func TestOptimalFromState_RoutesAroundWall(t *testing.T) {
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+		walls,
+	)
+
+	// From col 0, moving via 'l' to col 1 is walled. Only 'l' available -> unsolvable.
+	st := vim.State{Buffer: buffer("abc"), Cursor: vim.Cursor{Row: 0, Col: 0}, DesiredCol: -1}
+	got := OptimalFromState(st, c, []string{"l"}, 100)
+	if got != -1 {
+		t.Fatalf("OptimalFromState past wall = %d, want -1", got)
+	}
+}
+
+func TestFirstStepFromState_SuggestsJumpOverWall(t *testing.T) {
+	walls := challenge.WallSet{
+		vim.Cursor{Row: 0, Col: 1}: true,
+		vim.Cursor{Row: 0, Col: 2}: true,
+		vim.Cursor{Row: 0, Col: 3}: true,
+		vim.Cursor{Row: 0, Col: 4}: true,
+	}
+	c := challenge.NewWithWalls(
+		buffer("hello world"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 6),
+		walls,
+	)
+	st := vim.State{Buffer: buffer("hello world"), Cursor: vim.Cursor{Row: 0, Col: 0}, DesiredCol: -1}
+	key, dist := FirstStepFromState(st, c, []string{"w", "l"}, 100)
+	if key != "w" {
+		t.Fatalf("FirstStepFromState past wall key = %q, want %q", key, "w")
+	}
+	if dist != 1 {
+		t.Fatalf("FirstStepFromState past wall distance = %d, want 1", dist)
+	}
+}
