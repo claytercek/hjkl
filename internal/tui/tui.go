@@ -118,13 +118,15 @@ func displayKey(k string) string {
 }
 
 // starLine renders the star band for a result.
+var emptyStarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#444"))
+
 func starLine(r session.Result) string {
 	var b strings.Builder
 	for i := 1; i <= 3; i++ {
 		if i <= r.Stars {
 			b.WriteString(starStyle.Render("★"))
 		} else {
-			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444")).Render("☆"))
+			b.WriteString(emptyStarStyle.Render("☆"))
 		}
 	}
 	return b.String()

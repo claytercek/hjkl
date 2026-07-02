@@ -13,6 +13,9 @@ const DefaultMaxDepth = 200
 
 // stateKey uniquely identifies a vim.State for visited-state tracking,
 // excluding the Buffer which is immutable during a solve.
+//
+// All fields except Buffer contribute to the key because Buffer never
+// changes during a single solve run.
 type stateKey struct {
 	row, col        int
 	desiredCol      int
@@ -33,26 +36,17 @@ func toKey(s vim.State) stateKey {
 	}
 }
 
-// Solver computes the minimal-keystroke solution for a challenge.
-type Solver struct {
-	challenge challenge.Challenge
-}
-
-// New returns a Solver for the given challenge.
-func New(c challenge.Challenge) *Solver {
-	return &Solver{challenge: c}
-}
-
 // Solve runs a breadth-first search over the vocabulary to find the
 // minimal number of keystrokes that satisfy the challenge's goal
 // predicate. If no solution exists within maxDepth it returns -1.
-func (s *Solver) Solve(vocabulary []string, maxDepth int) int {
+func Solve(c challenge.Challenge, vocabulary []string, maxDepth int) int {
 	initial := vim.State{
-		Buffer: s.challenge.InitialBuffer,
-		Cursor: s.challenge.InitialCursor,
+		Buffer:      c.InitialBuffer,
+		Cursor:      c.InitialCursor,
+		DesiredCol:  -1,
 	}
 
-	if s.challenge.Goal(initial) {
+	if c.Goal(initial) {
 		return 0
 	}
 
@@ -72,7 +66,7 @@ func (s *Solver) Solve(vocabulary []string, maxDepth int) int {
 					continue
 				}
 				visited[key] = true
-				if s.challenge.Goal(ns) {
+				if c.Goal(ns) {
 					return depth
 				}
 				next = append(next, ns)

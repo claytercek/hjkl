@@ -18,9 +18,8 @@ func TestSolve_AlreadyAtTarget(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 2},
 		challenge.CursorAtTarget(0, 2),
 	)
-	s := New(c)
 
-	got := s.Solve([]string{"l", "h"}, 100)
+	got := Solve(c, []string{"l", "h"}, 100)
 	if got != 0 {
 		t.Fatalf("Solve = %d, want 0 (already at target)", got)
 	}
@@ -32,10 +31,9 @@ func TestSolve_SimpleRight(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 2),
 	)
-	s := New(c)
 
 	// Vocabulary only contains "l" — must go ll.
-	got := s.Solve([]string{"l"}, 100)
+	got := Solve(c, []string{"l"}, 100)
 	if got != 2 {
 		t.Fatalf("Solve = %d, want 2 (ll)", got)
 	}
@@ -47,9 +45,8 @@ func TestSolve_WordMotion(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 6), // start of "world"
 	)
-	s := New(c)
 
-	got := s.Solve([]string{"w"}, 100)
+	got := Solve(c, []string{"w"}, 100)
 	if got != 1 {
 		t.Fatalf("Solve = %d, want 1 (w)", got)
 	}
@@ -61,10 +58,9 @@ func TestSolve_MultiLine(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(2, 1),
 	)
-	s := New(c)
 
 	// j j l
-	got := s.Solve([]string{"j", "l"}, 100)
+	got := Solve(c, []string{"j", "l"}, 100)
 	if got != 3 {
 		t.Fatalf("Solve = %d, want 3 (jjl)", got)
 	}
@@ -78,9 +74,8 @@ func TestSolve_TieDifferentKeystrokes(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 6),
 	)
-	s := New(c)
 
-	got := s.Solve([]string{"w", "l"}, 100)
+	got := Solve(c, []string{"w", "l"}, 100)
 	if got != 1 {
 		t.Fatalf("Solve = %d, want 1 (w beats llllll)", got)
 	}
@@ -95,10 +90,9 @@ func TestSolve_RestrictedVocabulary(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 8),
 	)
-	s := New(c)
 
 	// Restricted to only "l" -> takes 8 steps
-	got := s.Solve([]string{"l"}, 100)
+	got := Solve(c, []string{"l"}, 100)
 	if got != 8 {
 		t.Fatalf("Solve with only l = %d, want 8", got)
 	}
@@ -110,9 +104,8 @@ func TestSolve_Unsolvable(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 10), // impossible, line is shorter
 	)
-	s := New(c)
 
-	got := s.Solve([]string{"l"}, 10) // maxDepth limits search
+	got := Solve(c, []string{"l"}, 10) // maxDepth limits search
 	if got != -1 {
 		t.Fatalf("Solve = %d, want -1 (unsolvable)", got)
 	}
@@ -124,10 +117,9 @@ func TestSolve_MaxDepthBound(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 2),
 	)
-	s := New(c)
 
 	// maxDepth=1 should not find the solution (needs 2 steps).
-	got := s.Solve([]string{"l"}, 1)
+	got := Solve(c, []string{"l"}, 1)
 	if got != -1 {
 		t.Fatalf("Solve with maxDepth=1 = %d, want -1", got)
 	}
@@ -141,9 +133,8 @@ func TestSolve_NoPendingLeakBetweenLevels(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 4),
 	)
-	s := New(c)
 
-	got := s.Solve([]string{"f", "o"}, 100)
+	got := Solve(c, []string{"f", "o"}, 100)
 	if got != 2 {
 		t.Fatalf("Solve = %d, want 2 (fo)", got)
 	}
@@ -158,9 +149,8 @@ func TestSolve_VisitedStateDoesNotRevisit(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 2),
 	)
-	s := New(c)
 
-	got := s.Solve([]string{"l", "h"}, 100)
+	got := Solve(c, []string{"l", "h"}, 100)
 	if got != 2 {
 		t.Fatalf("Solve = %d, want 2 (ll)", got)
 	}

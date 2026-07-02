@@ -42,11 +42,7 @@ func main() {
 	// Note: "g"+"g" is handled by BFS like any other two-step command:
 	// the first "g" sets Pending="g", the second "g" resolves to gg.
 
-	sv := solver.New(c)
-	par := sv.Solve(vocabulary, solver.DefaultMaxDepth)
-	if par < 0 {
-		par = -1
-	}
+	par := solver.Solve(c, vocabulary, solver.DefaultMaxDepth)
 
 	p := tea.NewProgram(tui.New(c, par), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

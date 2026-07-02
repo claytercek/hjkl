@@ -50,7 +50,7 @@ type Session struct {
 // challenge's starting state. If par >= 0 it is used for star-band
 // display; pass -1 when par is unknown.
 func New(c challenge.Challenge, par int) *Session {
-	st := vim.State{Buffer: c.InitialBuffer, Cursor: c.InitialCursor}
+	st := vim.State{Buffer: c.InitialBuffer, Cursor: c.InitialCursor, DesiredCol: -1}
 	return &Session{
 		state:          st,
 		goal:           c.Goal,
