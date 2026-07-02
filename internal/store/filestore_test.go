@@ -355,6 +355,34 @@ func TestFileStore_OldVersionResetCleanly(t *testing.T) {
 	}
 }
 
+func TestFileStore_OldVersionResetCleanly(t *testing.T) {
+	dir := t.TempDir()
+	progressPath := filepath.Join(dir, "progress.json")
+
+	// Write old-format progress (version 1, template-keyed).
+	oldData := `{"version":1,"best_scores":{"horizontal-line":{"keystrokes":3,"par":3,"stars":3}},"mastery":{"horizontal-line":{"value":0.9,"rounds":5}}}`
+	if err := os.WriteFile(progressPath, []byte(oldData), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := NewFileStoreWithPaths(filepath.Join(dir, "config.toml"), progressPath)
+
+	p, err := fs.LoadProgress()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	// Should be a clean reset: version 2, empty maps.
+	if p.Version != 2 {
+		t.Fatalf("Version = %d, want 2", p.Version)
+	}
+	if len(p.BestScores) != 0 {
+		t.Fatalf("BestScores = %+v, want empty after reset", p.BestScores)
+	}
+	if len(p.Mastery) != 0 {
+		t.Fatalf("Mastery = %+v, want empty after reset", p.Mastery)
+	}
+}
+
 func TestFileStore_CorruptConfigReturnsDefaults(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
