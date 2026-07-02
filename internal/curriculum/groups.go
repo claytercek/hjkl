@@ -134,6 +134,16 @@ func FrontierProgress(mastery map[string]float64) (frontierIdx int, ratio float6
 	return -1, 1.0
 }
 
+// GroupForGroupKey returns the MotionGroup with the given key, or nil if not found.
+func GroupForGroupKey(key string) *MotionGroup {
+	for i := range Groups {
+		if Groups[i].Key == key {
+			return &Groups[i]
+		}
+	}
+	return nil
+}
+
 // GroupForMotion returns the MotionGroup that the given motion key belongs to,
 // or nil if the motion is not part of any authored group (e.g. target
 // characters for f/t).

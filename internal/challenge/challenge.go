@@ -137,6 +137,17 @@ type Config struct {
 	// MaxBufferLen is the approximate maximum total characters in the buffer.
 	// 0 means no limit.
 	MaxBufferLen int
+
+	// WallFraction controls the proportion of regular (non-intro) challenges
+	// that include Walls targeting an unlocked motion group. 0.0 means no
+	// wall challenges; 1.0 means all challenges are wall challenges.
+	// A value around 0.33 (~1/3) is recommended for the stream.
+	WallFraction float64
+
+	// WallGroupKeys lists the unlocked motion group keys that wall challenges
+	// can target (e.g. ["wbe", "ft;", "ggG"]). When WallFraction > 0, the
+	// generator randomly picks from this list for each wall challenge.
+	WallGroupKeys []string
 }
 
 // DefaultConfig returns a moderate-difficulty config.

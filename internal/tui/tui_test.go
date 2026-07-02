@@ -868,7 +868,7 @@ func TestChallengeStream_Next(t *testing.T) {
 	stream := NewChallengeStream(gen, rng, challenge.DefaultConfig())
 
 	mastery := map[string]float64{}
-	c, tmpl, err := stream.Next(mastery)
+	c, tmpl, _, err := stream.Next(mastery)
 	if err != nil {
 		t.Fatalf("Next: %v", err)
 	}

@@ -198,20 +198,49 @@ type ChallengeStream struct {
 	cfg challenge.Config
 }
 
+// defaultWallFraction is the proportion of regular stream rounds that are
+// Wall Challenges targeting an already-unlocked (non-starting) group, when
+// the caller doesn't specify one explicitly.
+const defaultWallFraction = 1.0 / 3.0
+
 // NewChallengeStream creates a stream that draws from gen with cfg.
 func NewChallengeStream(gen *challenge.Generator, rng *rand.Rand, cfg challenge.Config) *ChallengeStream {
+	if cfg.WallFraction == 0 {
+		cfg.WallFraction = defaultWallFraction
+	}
 	return &ChallengeStream{gen: gen, rng: rng, cfg: cfg}
 }
 
-// Next generates a new challenge, weighted toward the frontier group.
-// The generator's vocabulary is restricted to unlocked motions.
-func (cs *ChallengeStream) Next(mastery map[string]float64) (challenge.Challenge, challenge.TemplateKind, error) {
+// Next generates a new challenge, weighted toward the frontier group. The
+// generator's vocabulary is restricted to unlocked motions. The returned
+// groupKey overrides curriculum.GroupForTemplate for progress tracking; it
+// is non-empty only for Wall Challenges, which target a specific group
+// regardless of the underlying template.
+func (cs *ChallengeStream) Next(mastery map[string]float64) (c challenge.Challenge, tmpl challenge.TemplateKind, groupKey string, err error) {
 	return cs.nextWithRetries(mastery, 3)
 }
 
 // nextWithRetries is like Next but with a bounded retry budget for
 // challenges that aren't solvable with the restricted vocabulary.
-func (cs *ChallengeStream) nextWithRetries(mastery map[string]float64, retries int) (challenge.Challenge, challenge.TemplateKind, error) {
+func (cs *ChallengeStream) nextWithRetries(mastery map[string]float64, retries int) (challenge.Challenge, challenge.TemplateKind, string, error) {
+	// Occasionally mix in a Wall Challenge targeting an already-unlocked,
+	// non-starting group, to reinforce motions the player has learned.
+	var wallEligible []string
+	for i := 1; i < len(curriculum.Groups); i++ {
+		if mastery[curriculum.Groups[i].Key] >= curriculum.MasteryThreshold {
+			wallEligible = append(wallEligible, curriculum.Groups[i].Key)
+		}
+	}
+	if len(wallEligible) > 0 && cs.rng.Float64() < cs.cfg.WallFraction {
+		groupKey := wallEligible[cs.rng.Intn(len(wallEligible))]
+		if group := curriculum.GroupForGroupKey(groupKey); group != nil {
+			if c, err := cs.gen.GenerateWall(groupKey, group.Keys, cs.cfg); err == nil {
+				return c, challenge.THorizontalLine, groupKey, nil
+			}
+		}
+		// Fall through to normal generation on failure.
+	}
+
 	// Determine the frontier group.
 	frontierIdx, _ := curriculum.FrontierProgress(mastery)
 
@@ -267,7 +296,7 @@ func (cs *ChallengeStream) nextWithRetries(mastery map[string]float64, retries i
 	// Generate a challenge using the generator's (full) vocabulary.
 	c, err := cs.gen.Generate(picked, cs.cfg)
 	if err != nil {
-		return challenge.Challenge{}, challenge.TemplateKind(0), fmt.Errorf("generate %s: %w", picked, err)
+		return challenge.Challenge{}, challenge.TemplateKind(0), "", fmt.Errorf("generate %s: %w", picked, err)
 	}
 
 	// If the unlocked vocabulary is a strict subset of the full set,
@@ -279,13 +308,13 @@ func (cs *ChallengeStream) nextWithRetries(mastery map[string]float64, retries i
 			if retries > 0 {
 				return cs.nextWithRetries(mastery, retries-1)
 			}
-			return challenge.Challenge{}, challenge.TemplateKind(0),
+			return challenge.Challenge{}, challenge.TemplateKind(0), "",
 				fmt.Errorf("challenge not solvable with unlocked vocabulary after retries")
 		}
 		c.Par = par
 	}
 
-	return c, picked, nil
+	return c, picked, "", nil
 }
 
 // NextIntro generates a challenge that specifically exercises newVocab
@@ -734,6 +763,11 @@ type StreamModel struct {
 	state           streamState
 	currentTemplate challenge.TemplateKind
 
+	// currentGroupKey overrides curriculum.GroupForTemplate(currentTemplate)
+	// for progress tracking. Non-empty only for Wall Challenges, which
+	// target a specific motion group regardless of the underlying template.
+	currentGroupKey string
+
 	// Pause overlay
 	paused     bool
 	menuCursor int
@@ -777,7 +811,7 @@ func NewStream(gen *challenge.Generator, rng *rand.Rand, s store.Store, cfg ...C
 	}
 
 	stream := NewChallengeStream(gen, rng, challenge.DefaultConfig())
-	c, tmpl, err := stream.Next(masteryFloatMap(p.Mastery))
+	c, tmpl, groupKey, err := stream.Next(masteryFloatMap(p.Mastery))
 	if err != nil {
 		// Fallback: use full vocabulary to generate a challenge.
 		c, err = gen.Generate(challenge.THorizontalLine, challenge.DefaultConfig())
@@ -785,11 +819,13 @@ func NewStream(gen *challenge.Generator, rng *rand.Rand, s store.Store, cfg ...C
 			panic("failed to generate initial challenge: " + err.Error())
 		}
 		tmpl = challenge.THorizontalLine
+		groupKey = ""
 	}
 
 	return StreamModel{
 		game:            NewGame(c, config.Bindings, config.ReducedMotion),
 		currentTemplate: tmpl,
+		currentGroupKey: groupKey,
 		state:           statePlaying,
 		config:          config,
 		stream:          stream,
@@ -952,7 +988,10 @@ func (m *StreamModel) onRoundSolved() {
 
 	beforeIdx, _ := curriculum.FrontierProgress(masteryFloatMap(m.progress.Mastery))
 
-	groupKey := curriculum.GroupForTemplate(m.currentTemplate)
+	groupKey := m.currentGroupKey
+	if groupKey == "" {
+		groupKey = curriculum.GroupForTemplate(m.currentTemplate)
+	}
 	m.updateProgress(groupKey, r)
 	m.saveProgress()
 
@@ -982,6 +1021,7 @@ func (m *StreamModel) startIntroRound() {
 	}
 	m.introGame = NewGame(c, m.config.Bindings, m.config.ReducedMotion)
 	m.currentTemplate = tmpl
+	m.currentGroupKey = ""
 	m.state = stateIntroRound
 }
 
@@ -1108,7 +1148,7 @@ func (m *StreamModel) retryChallenge() {
 
 // nextChallenge generates and starts a new challenge.
 func (m *StreamModel) nextChallenge() {
-	c, tmpl, err := m.stream.Next(masteryFloatMap(m.progress.Mastery))
+	c, tmpl, groupKey, err := m.stream.Next(masteryFloatMap(m.progress.Mastery))
 	if err != nil {
 		// Fallback: retry once with full vocabulary.
 		gen := challenge.NewGenerator(
@@ -1124,9 +1164,11 @@ func (m *StreamModel) nextChallenge() {
 			return
 		}
 		tmpl = challenge.THorizontalLine
+		groupKey = ""
 	}
 	m.game = NewGame(c, m.config.Bindings, m.config.ReducedMotion)
 	m.currentTemplate = tmpl
+	m.currentGroupKey = groupKey
 	m.state = statePlaying
 }
 
