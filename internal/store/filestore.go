@@ -17,8 +17,8 @@ import (
 //	~/.config/hjkl/config.toml       (or XDG_CONFIG_HOME)
 //	~/.local/share/hjkl/progress.json (or XDG_DATA_HOME)
 //
-// On macOS the same paths are used — Go's os.UserConfigDir and
-// os.UserCacheDir handle the platform mapping correctly.
+// On macOS and Windows the same layout is used — Go's os.UserConfigDir
+// and os.UserHomeDir handle the platform mapping correctly.
 type FileStore struct {
 	configPath   string
 	progressPath string
@@ -31,21 +31,15 @@ func NewFileStore() (*FileStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("user config dir: %w", err)
 	}
-	dataDir, err := os.UserHomeDir() // We'll use ~/.local/share for data
-	if err != nil {
-		return nil, fmt.Errorf("user home dir: %w", err)
-	}
-	_ = dataDir // We'll construct the data dir properly
 
-	// Use XDG_DATA_HOME or fall back to ~/.local/share.
+	// Use XDG_DATA_HOME or fall back to $HOME/.local/share (per XDG spec).
 	dataHome := os.Getenv("XDG_DATA_HOME")
 	if dataHome == "" {
-		dataHome = filepath.Join(configDir, "..", "..", ".local", "share")
-		// Resolve to absolute path.
-		abs, err := filepath.Abs(dataHome)
-		if err == nil {
-			dataHome = abs
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("user home dir: %w", err)
 		}
+		dataHome = filepath.Join(home, ".local", "share")
 	}
 
 	return &FileStore{

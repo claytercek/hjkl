@@ -12,10 +12,9 @@ type MotionKey string
 
 // BestScore holds the best result ever achieved for a motion type.
 type BestScore struct {
-	Keystrokes int     `json:"keystrokes"`
-	Par        int     `json:"par"`
-	Stars      int     `json:"stars"`
-	RecordedAt string  `json:"recorded_at,omitempty"` // RFC3339 timestamp
+	Keystrokes int `json:"keystrokes"`
+	Par        int `json:"par"`
+	Stars      int `json:"stars"`
 }
 
 // Mastery tracks proficiency for a motion type using an exponentially-
