@@ -59,7 +59,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := tui.NewLesson(lesson, st)
+	// Load persisted progress to determine how many groups are unlocked.
+	progress, _ := st.LoadProgress()
+	unlockedCount := progress.UnlockedCount
+	if unlockedCount < 1 {
+		unlockedCount = 1
+	}
+
+	// Build the challenge generator (full vocabulary for internal par checks).
+	gen := challenge.NewGenerator(rng, challenge.SolverFunc(solver.Solve), challenge.NavigationVocabulary, solver.DefaultMaxDepth)
+
+	// Create the learning stream.
+	config := challenge.DefaultConfig()
+	stream := curriculum.NewStream(gen, config, rng, progress, unlockedCount)
+
+	m := tui.NewLessonStream(stream, st)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

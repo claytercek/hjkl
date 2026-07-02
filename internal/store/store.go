@@ -29,9 +29,10 @@ type Mastery struct {
 
 // Progress is the complete set of persisted progress data.
 type Progress struct {
-	Version    int                `json:"version"`    // schema version for forward compat
-	BestScores map[GroupKey]BestScore `json:"best_scores,omitempty"`
-	Mastery    map[GroupKey]Mastery   `json:"mastery,omitempty"`
+	Version       int                    `json:"version"` // schema version for forward compat
+	BestScores    map[GroupKey]BestScore `json:"best_scores,omitempty"`
+	Mastery       map[GroupKey]Mastery   `json:"mastery,omitempty"`
+	UnlockedCount int                    `json:"unlocked_count"` // number of unlocked motion groups (≥1)
 }
 
 // Config holds user preferences persisted in TOML.
@@ -73,11 +74,13 @@ type Store interface {
 	Paths() (configPath, progressPath string)
 }
 
-// NewProgress returns an initialised Progress with empty maps.
+// NewProgress returns an initialised Progress with empty maps and the first
+// motion group always unlocked.
 func NewProgress() Progress {
 	return Progress{
-		Version:    2,
-		BestScores: make(map[GroupKey]BestScore),
-		Mastery:    make(map[GroupKey]Mastery),
+		Version:        1,
+		BestScores:     make(map[GroupKey]BestScore),
+		Mastery:        make(map[GroupKey]Mastery),
+		UnlockedCount: 1,
 	}
 }

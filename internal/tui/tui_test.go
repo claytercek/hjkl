@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"math/rand"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/clay/hjkl/internal/challenge"
 	"github.com/clay/hjkl/internal/curriculum"
+	"github.com/clay/hjkl/internal/solver"
+	"github.com/clay/hjkl/internal/store"
 	"github.com/clay/hjkl/internal/vim"
 )
 
@@ -961,4 +964,201 @@ func TestLessonView_WithWallDoesNotCrash(t *testing.T) {
 	// Keystroke lands on wall.
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	_ = m2.(LessonModel).View() // should not panic
+}
+
+// ---------------------------------------------------------------------------
+// Stream mode tests
+// ---------------------------------------------------------------------------
+
+func newTestStreamModel(seed int64, unlocked int) *curriculum.Stream {
+	rng := rand.New(rand.NewSource(seed))
+	gen := challenge.NewGenerator(rng, challenge.SolverFunc(solver.Solve), challenge.NavigationVocabulary, solver.DefaultMaxDepth)
+	rng2 := rand.New(rand.NewSource(seed + 1))
+	p := store.NewProgress()
+	return curriculum.NewStream(gen, challenge.DefaultConfig(), rng2, p, unlocked)
+}
+
+func TestNewLessonStream_StartsPlaying(t *testing.T) {
+	str := newTestStreamModel(42, 1)
+	m := NewLessonStream(str)
+
+	if m.state != statePlaying {
+		t.Fatalf("initial state = %d, want statePlaying", m.state)
+	}
+	if m.stream == nil {
+		t.Fatal("expected stream to be set")
+	}
+}
+
+func TestNewLessonStream_SolvesRound(t *testing.T) {
+	str := newTestStreamModel(42, 1)
+	m := NewLessonStream(str)
+
+	// Send a keystroke. The game might solve the challenge depending on the
+	// generated challenge. Just verify we don't crash.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	after := m2.(LessonModel)
+
+	// Should still be in some valid state.
+	if after.state != statePlaying && after.state != stateRoundDone {
+		t.Fatalf("unexpected state after keystroke: %d", after.state)
+	}
+}
+
+func TestNewLessonStream_Skip(t *testing.T) {
+	str := newTestStreamModel(99, 1)
+	m := NewLessonStream(str)
+
+	// Skip should generate a new round.
+	m.skipRound()
+	if m.state != statePlaying {
+		t.Fatalf("after skip, state = %d, want statePlaying", m.state)
+	}
+}
+
+func TestNewLessonStream_Retry(t *testing.T) {
+	str := newTestStreamModel(99, 1)
+	m := NewLessonStream(str)
+
+	m.retryRound()
+	if m.state != statePlaying {
+		t.Fatalf("after retry, state = %d, want statePlaying", m.state)
+	}
+}
+
+func TestNewLessonStream_HintKey(t *testing.T) {
+	str := newTestStreamModel(42, 1)
+	m := NewLessonStream(str)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	hinted := m2.(LessonModel)
+
+	if hinted.state != statePlaying {
+		t.Fatalf("after hint, state = %d, want statePlaying", hinted.state)
+	}
+}
+
+func TestNewLessonStream_PauseToggle(t *testing.T) {
+	str := newTestStreamModel(42, 1)
+	m := NewLessonStream(str)
+
+	// Pause.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(LessonModel)
+
+	if !paused.paused {
+		t.Fatal("expected paused to be true after Ctrl-C")
+	}
+
+	// Resume.
+	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	resumed := m3.(LessonModel)
+
+	if resumed.paused {
+		t.Fatal("expected paused to be false after second Ctrl-C")
+	}
+}
+
+func TestNewLessonStream_ViewDoesNotCrash(t *testing.T) {
+	str := newTestStreamModel(42, 1)
+	m := NewLessonStream(str)
+	_ = m.View() // should not panic
+}
+
+func TestUnlockInterstitial_View(t *testing.T) {
+	str := newTestStreamModel(42, 1)
+	m := NewLessonStream(str)
+
+	// Push mastery above threshold to trigger unlock.
+	for i := 0; i < 10; i++ {
+		m.stream.UpdateFrontierMastery(3, 3, 3)
+	}
+	if !m.stream.ShouldUnlock() {
+		t.Fatal("should be ready to unlock")
+	}
+
+	// Trigger unlock flow.
+	m.pendingGroup = m.stream.UnlockNext()
+	m.state = stateUnlockInterstitial
+
+	// View should not panic.
+	_ = m.View()
+
+	// Acknowledge with space.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+	after := m2.(LessonModel)
+	if after.state != stateIntroRound && after.state != statePlaying {
+		t.Fatalf("after ack, state = %d, want stateIntroRound or statePlaying", after.state)
+	}
+}
+
+func TestUnlockInterstitial_AdvanceKey(t *testing.T) {
+	str := newTestStreamModel(42, 1)
+	m := NewLessonStream(str)
+
+	// Set up unlock state.
+	for i := 0; i < 10; i++ {
+		m.stream.UpdateFrontierMastery(3, 3, 3)
+	}
+	m.pendingGroup = m.stream.UnlockNext()
+	m.state = stateUnlockInterstitial
+
+	// Enter should work same as space.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	after := m2.(LessonModel)
+	if after.state != stateIntroRound && after.state != statePlaying {
+		t.Fatalf("after enter ack, state = %d, want stateIntroRound or statePlaying", after.state)
+	}
+}
+
+func TestIntroRound_SkipAndView(t *testing.T) {
+	str := newTestStreamModel(99, 1)
+	m := NewLessonStream(str)
+
+	// Set up unlock + intro round.
+	for i := 0; i < 10; i++ {
+		m.stream.UpdateFrontierMastery(3, 3, 3)
+	}
+	m.pendingGroup = m.stream.UnlockNext()
+	m.state = stateUnlockInterstitial
+
+	// Acknowledge to start intro round.
+	m.startIntroRound()
+	if m.state != stateIntroRound {
+		t.Fatalf("after startIntroRound, state = %d, want stateIntroRound", m.state)
+	}
+
+	// View should not panic.
+	_ = m.View()
+
+	// Skip the intro round.
+	m.skipRound()
+	if m.state != statePlaying {
+		t.Fatalf("after skip intro round, state = %d, want statePlaying", m.state)
+	}
+}
+
+func TestSaveProgress_IncludesUnlockedCount(t *testing.T) {
+	dir := t.TempDir()
+	progressPath := dir + "/progress.json"
+
+	str := newTestStreamModel(42, 1)
+	fs := store.NewFileStoreWithPaths(dir+"/config.toml", progressPath)
+	m := NewLessonStream(str, fs)
+
+	// Push mastery and unlock.
+	for i := 0; i < 10; i++ {
+		m.stream.UpdateFrontierMastery(3, 3, 3)
+	}
+	m.pendingGroup = m.stream.UnlockNext()
+
+	m.saveProgress()
+
+	loaded, err := fs.LoadProgress()
+	if err != nil {
+		t.Fatalf("LoadProgress error: %v", err)
+	}
+	if loaded.UnlockedCount != 2 {
+		t.Errorf("UnlockedCount = %d, want 2", loaded.UnlockedCount)
+	}
 }

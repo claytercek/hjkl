@@ -557,9 +557,11 @@ func viewPauseOverlay(selected int) string {
 type lessonState int
 
 const (
-	statePlaying  lessonState = iota // a round is in progress
-	stateRoundDone                   // current round solved, awaiting advance
-	stateSummary                     // all rounds done, showing summary
+	statePlaying          lessonState = iota // a round is in progress
+	stateRoundDone                           // current round solved, awaiting advance
+	stateUnlockInterstitial                  // showing unlock interstitial for a new motion group
+	stateIntroRound                          // playing the forced intro round for a newly unlocked group
+	stateSummary                             // all rounds done, showing summary
 )
 
 // LessonModel is the Bubble Tea model for a multi-round lesson.
@@ -582,6 +584,13 @@ type LessonModel struct {
 	// Progress persistence (may be nil)
 	store    store.Store
 	progress store.Progress // in-memory copy of progress (updated live)
+
+	// Stream mode (optional). When set, rounds are generated on demand and
+	// unlocks are managed automatically.
+	stream         *curriculum.Stream
+	pendingGroup   curriculum.MotionGroup // group to be introduced via interstitial+intro round
+	introGame      GameModel              // game model for the intro round
+	currentRound   curriculum.Round       // the current stream round (for best-score tracking)
 }
 
 // NewLesson creates a LessonModel from a curriculum.Lesson.
@@ -597,6 +606,63 @@ func NewLesson(lesson *curriculum.Lesson, s ...store.Store) LessonModel {
 // NewLessonWithConfig creates a LessonModel with the given config.
 func NewLessonWithConfig(lesson *curriculum.Lesson, cfg Config) LessonModel {
 	return newLesson(lesson, cfg, nil)
+}
+
+// NewLessonStream creates a LessonModel that generates rounds on demand from a
+// Stream and handles motion-group unlocks. The stream's progress is loaded from
+// the store if provided.
+func NewLessonStream(str *curriculum.Stream, s ...store.Store) LessonModel {
+	var st store.Store
+	if len(s) > 0 {
+		st = s[0]
+	}
+	cfg := DefaultConfig()
+
+	var p store.Progress
+	if st != nil {
+		p, _ = st.LoadProgress()
+	} else {
+		p = str.Progress()
+	}
+
+	// Sync stream progress from store (includes unlocked count).
+	str.SetProgress(p)
+
+	// Ensure maps are never nil.
+	if p.BestScores == nil {
+		p.BestScores = make(map[store.MotionKey]store.BestScore)
+	}
+	if p.Mastery == nil {
+		p.Mastery = make(map[store.MotionKey]store.Mastery)
+	}
+
+	// Generate the first round.
+	round, err := str.NextRound()
+	if err != nil {
+		// Fallback: create a minimal challenge so the app doesn't crash.
+		return LessonModel{
+			lesson:   nil,
+			game:     GameModel{},
+			state:    stateSummary,
+			config:   cfg,
+			store:    st,
+			progress: p,
+			stream:   str,
+		}
+	}
+
+	game := NewGame(round.Challenge, cfg.Bindings, cfg.ReducedMotion)
+	return LessonModel{
+		lesson:       nil,
+		current:      0,
+		game:         game,
+		state:        statePlaying,
+		config:       cfg,
+		store:        st,
+		progress:     p,
+		stream:       str,
+		currentRound: round,
+	}
 }
 
 // newLesson is the shared constructor.
@@ -637,6 +703,19 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.paused || m.state == stateSummary {
 			return m, nil
 		}
+
+		// Advance animations for whichever game is active.
+		if m.state == stateIntroRound {
+			m.introGame.advanceAnimations()
+			active := m.introGame.wasteFrames > 0 || m.introGame.successFrames > 0 || len(m.introGame.ghosts) > 0
+			if active {
+				return m, tea.Tick(tickInterval, func(t time.Time) tea.Msg {
+					return tickMsg(t)
+				})
+			}
+			return m, nil
+		}
+
 		m.game.advanceAnimations()
 		// If there are still active animations, keep ticking.
 		active := m.game.wasteFrames > 0 || m.game.successFrames > 0 || len(m.game.ghosts) > 0
@@ -648,16 +727,18 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Handle pause toggle globally. Esc is never an app control,
-		// so Ctrl-C toggles the menu. Pause only works during active
-		// play states (playing, roundDone) and when already paused.
+		// Handle pause toggle.
 		if msg.String() == m.config.Bindings.Pause {
-			if m.paused || m.state == statePlaying || m.state == stateRoundDone {
+			canPause := m.paused ||
+				m.state == statePlaying ||
+				m.state == stateRoundDone ||
+				m.state == stateIntroRound ||
+				m.state == stateUnlockInterstitial
+			if canPause {
 				m.paused = !m.paused
 				m.menuCursor = 0
 				return m, nil
 			}
-			// Can't pause in summary.
 			return m, nil
 		}
 
@@ -669,10 +750,13 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Esc is never intercepted by the app (reserved for vim).
 		if msg.String() == "esc" {
-			// Pass through to game.
-			if m.state == statePlaying {
+			if m.state == statePlaying || m.state == stateIntroRound {
 				var cmd tea.Cmd
-				m.game, cmd = m.game.Update(msg)
+				if m.state == stateIntroRound {
+					m.introGame, cmd = m.introGame.Update(msg)
+				} else {
+					m.game, cmd = m.game.Update(msg)
+				}
 				return m, cmd
 			}
 			return m, nil
@@ -686,8 +770,25 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case m.state == stateUnlockInterstitial:
+			// Acknowledge the interstitial to start the intro round.
+			if msg.String() == " " || msg.String() == "enter" {
+				m.startIntroRound()
+				return m, nil
+			}
+			return m, nil
+
+		case m.state == stateIntroRound && (msg.String() == " " || msg.String() == "enter"):
+			if m.introGame.Solved() {
+				m.afterIntroRound()
+				return m, nil
+			}
+			return m, nil
+
 		case msg.String() == m.config.Bindings.Hint:
 			if m.state == statePlaying && !m.game.Solved() {
+				m.showHint()
+			} else if m.state == stateIntroRound && !m.introGame.Solved() {
 				m.showHint()
 			}
 			return m, nil
@@ -704,44 +805,124 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case msg.String() == " ", msg.String() == "enter":
 			if m.state == stateRoundDone {
-				m.advanceToNextRound()
+				if m.stream != nil {
+					m.advanceStreamRound()
+				} else {
+					m.advanceToNextRound()
+				}
 				return m, nil
 			}
 		}
 
-		// Only forward keystrokes if a round is in progress.
-		if m.state == statePlaying {
+		// Forward keystrokes to the active game.
+		switch m.state {
+		case statePlaying:
 			var cmd tea.Cmd
 			m.game, cmd = m.game.Update(msg)
-
 			// Check if the round just completed.
 			if m.game.Solved() {
-				r := m.game.Result()
+				m.onRoundSolved()
+			}
+			return m, cmd
 
-				// Record the result on the lesson round.
-				m.lesson.Rounds[m.current].Result = curriculum.Result{
-					Keystrokes: r.Keystrokes,
-					Par:        r.Par,
-					Stars:      r.Stars,
-				}
-
-				// Update persisted progress (best score + mastery).
-				groupKey := curriculum.GroupForTemplate(m.lesson.Rounds[m.current].Template)
-				m.updateProgress(groupKey, r)
-
-				if m.current >= len(m.lesson.Rounds)-1 {
-					m.state = stateSummary
-					// Save progress on lesson completion.
-					m.saveProgress()
-				} else {
-					m.state = stateRoundDone
-				}
+		case stateIntroRound:
+			var cmd tea.Cmd
+			m.introGame, cmd = m.introGame.Update(msg)
+			if m.introGame.Solved() {
+				m.onIntroRoundSolved()
 			}
 			return m, cmd
 		}
 	}
 
 	return m, nil
+}
+
+// onRoundSolved handles the completion of a normal (stream) round.
+func (m *LessonModel) onRoundSolved() {
+	if m.stream == nil {
+		// Legacy path (non-stream Lesson).
+		r := m.game.Result()
+		m.lesson.Rounds[m.current].Result = curriculum.Result{
+			Keystrokes: r.Keystrokes,
+			Par:        r.Par,
+			Stars:      r.Stars,
+		}
+		tmplName := m.lesson.Rounds[m.current].Template.String()
+		m.updateProgress(tmplName, r)
+
+		if m.current >= len(m.lesson.Rounds)-1 {
+			m.state = stateSummary
+			m.saveProgress()
+		} else {
+			m.state = stateRoundDone
+		}
+		return
+	}
+
+	// Stream path.
+	r := m.game.Result()
+
+	// Update progress with result.
+	m.stream.UpdateFrontierMastery(r.Keystrokes, r.Par, r.Stars)
+	m.stream.UpdateBestScore(m.currentRound.Template.String(), r.Keystrokes, r.Par, r.Stars)
+
+	// Check for unlock.
+	if m.stream.ShouldUnlock() {
+		m.pendingGroup = m.stream.UnlockNext()
+		m.state = stateUnlockInterstitial
+		m.saveProgress()
+		return
+	}
+
+	// No unlock — advance to next round.
+	m.advanceStreamRound()
+}
+
+// advanceStreamRound generates the next stream round and transitions to playing.
+func (m *LessonModel) advanceStreamRound() {
+	round, err := m.stream.NextRound()
+	if err != nil {
+		// On generation failure, stay on round done so the user can skip.
+		m.state = stateRoundDone
+		return
+	}
+	m.currentRound = round
+	m.game = NewGame(round.Challenge, m.config.Bindings, m.config.ReducedMotion)
+	m.hintActive = false
+	m.state = statePlaying
+}
+
+// startIntroRound generates and starts the intro round for the pending group.
+func (m *LessonModel) startIntroRound() {
+	round, err := m.stream.GenerateIntroRound(m.pendingGroup)
+	if err != nil {
+		// Fallback: generate a normal round instead.
+		round, err = m.stream.NextRound()
+		if err != nil {
+			m.state = statePlaying
+			return
+		}
+	}
+	m.currentRound = round
+	m.introGame = NewGame(round.Challenge, m.config.Bindings, m.config.ReducedMotion)
+	m.state = stateIntroRound
+}
+
+// onIntroRoundSolved handles completion of the intro round.
+func (m *LessonModel) onIntroRoundSolved() {
+	// Record intro round result.
+	r := m.introGame.Result()
+	m.stream.UpdateFrontierMastery(r.Keystrokes, r.Par, r.Stars)
+	m.stream.UpdateBestScore(m.currentRound.Template.String(), r.Keystrokes, r.Par, r.Stars)
+
+	// After the intro round, transition to normal play with the new group unlocked.
+	m.advanceStreamRound()
+}
+
+// afterIntroRound handles the transition after acknowledging a solved intro round.
+func (m *LessonModel) afterIntroRound() {
+	m.advanceStreamRound()
 }
 
 // updateProgress updates the in-memory progress with the round result.
@@ -758,10 +939,29 @@ func (m *LessonModel) updateProgress(groupKey string, r session.Result) {
 }
 
 // saveProgress persists the current in-memory progress through the store.
+// In stream mode, the stream's progress (including unlocked count) is synced
+// before persisting.
 func (m *LessonModel) saveProgress() {
 	if m.store != nil {
-		_ = m.store.SaveProgress(m.progress)
+		p := m.progress
+		if m.stream != nil {
+			sp := m.stream.Progress()
+			p = sp
+		}
+		p.UnlockedCount = m.unlockedCount()
+		_ = m.store.SaveProgress(p)
 	}
+}
+
+// unlockedCount returns the number of unlocked motion groups.
+func (m *LessonModel) unlockedCount() int {
+	if m.stream != nil {
+		return m.stream.UnlockedCount()
+	}
+	if m.progress.UnlockedCount > 0 {
+		return m.progress.UnlockedCount
+	}
+	return 1
 }
 
 // handleMenuKey processes key events while the pause overlay is active.
@@ -812,20 +1012,35 @@ func (m *LessonModel) executeMenuSelection() tea.Cmd {
 }
 
 // showHint computes and displays the optimal next keystroke.
+// Works for both normal and intro round games.
 func (m *LessonModel) showHint() {
-	state := m.game.session.State()
+	g := &m.game
+	if m.state == stateIntroRound {
+		g = &m.introGame
+	}
+	state := g.session.State()
 	vocab := challenge.NavigationVocabulary
+	if m.stream != nil {
+		vocab = m.stream.CurrentVocabulary()
+	}
 	maxDepth := solver.DefaultMaxDepth
-	key, _ := solver.FirstStepFromState(state, m.game.challenge, vocab, maxDepth)
+	key, _ := solver.FirstStepFromState(state, g.challenge, vocab, maxDepth)
 	m.hintActive = true
 	if key != "" {
-		m.game.hintKey = key
-		m.game.hintVisible = true
+		g.hintKey = key
+		g.hintVisible = true
 	}
 }
 
 // skipRound advances to the next round, marking the current one as skipped.
+// In stream mode, generates the next round on demand.
 func (m *LessonModel) skipRound() {
+	if m.stream != nil {
+		m.advanceStreamRound()
+		return
+	}
+
+	// Legacy lesson mode.
 	m.lesson.Rounds[m.current].Result = curriculum.Result{
 		Keystrokes: 0,
 		Par:        m.lesson.Rounds[m.current].Challenge.Par,
@@ -841,14 +1056,26 @@ func (m *LessonModel) skipRound() {
 }
 
 // retryRound restarts the current round, clearing its result.
+// In stream mode, generates a new round (no historical result to preserve).
 func (m *LessonModel) retryRound() {
+	if m.stream != nil {
+		m.advanceStreamRound()
+		return
+	}
+
 	m.lesson.Rounds[m.current].Result = curriculum.Result{}
 	m.game = NewGame(m.lesson.Rounds[m.current].Challenge, m.config.Bindings, m.config.ReducedMotion)
 	m.state = statePlaying
 }
 
 // restartLesson goes back to the first round, clearing all round results.
+// In stream mode, this is a no-op (the stream always generates new content).
 func (m *LessonModel) restartLesson() {
+	if m.stream != nil {
+		m.advanceStreamRound()
+		return
+	}
+
 	for i := range m.lesson.Rounds {
 		m.lesson.Rounds[i].Result = curriculum.Result{}
 	}
@@ -857,12 +1084,84 @@ func (m *LessonModel) restartLesson() {
 	m.state = statePlaying
 }
 
-// advanceToNextRound creates the game model for the next round.
+// advanceToNextRound creates the game model for the next round (legacy mode).
 func (m *LessonModel) advanceToNextRound() {
 	m.current++
 	m.game = NewGame(m.lesson.Rounds[m.current].Challenge, m.config.Bindings, m.config.ReducedMotion)
 	m.state = statePlaying
 	m.hintActive = false
+}
+
+// ---------------------------------------------------------------------------
+// Unlock interstitial styling
+// ---------------------------------------------------------------------------
+
+var (
+	unlockTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#0ff"))
+
+	unlockGroupStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#ff0")).
+				Background(lipgloss.Color("#228"))
+
+	unlockPitchStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#ccc"))
+
+	unlockPromptStyle = lipgloss.NewStyle().
+				Italic(true).
+				Foreground(lipgloss.Color("#888"))
+
+	interstitialBorder = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#0ff")).
+				Padding(2, 4).
+				Width(50)
+)
+
+// viewUnlockInterstitial renders the full-screen unlock interstitial.
+func (m LessonModel) viewUnlockInterstitial() string {
+	var b strings.Builder
+
+	b.WriteString(unlockTitleStyle.Render("★ New Unlock! ★") + "\n\n")
+
+	b.WriteString(unlockGroupStyle.Render("  " + m.pendingGroup.Name + "  ") + "\n\n")
+
+	b.WriteString(unlockPitchStyle.Render(m.pendingGroup.Pitch) + "\n\n\n")
+
+	b.WriteString(unlockPromptStyle.Render("Press space for the intro round."))
+
+	content := b.String()
+
+	// Center the content in a bordered box.
+	return interstitialBorder.Render(content)
+}
+
+// viewIntroRound renders the intro round game.
+func (m LessonModel) viewIntroRound() string {
+	var groupLine string
+	groupLine = unlockGroupStyle.Render("  " + m.pendingGroup.Name + "  ")
+
+	gameView := m.introGame.ViewGame()
+
+	var goalLine string
+	if !m.introGame.Solved() {
+		goalLine = normalStyle.Render("Use the new motions!")
+	}
+
+	footer := m.renderFooter()
+
+	parts := []string{
+		groupLine,
+		"",
+		gameView,
+		"",
+		goalLine,
+		"",
+		footer,
+	}
+	return strings.Join(parts, "\n")
 }
 
 // View implements tea.Model.
@@ -877,6 +1176,10 @@ func (m LessonModel) View() string {
 		return m.viewPlaying()
 	case stateRoundDone:
 		return m.viewRoundDone()
+	case stateUnlockInterstitial:
+		return m.viewUnlockInterstitial()
+	case stateIntroRound:
+		return m.viewIntroRound()
 	case stateSummary:
 		return m.viewSummary()
 	default:
@@ -886,9 +1189,18 @@ func (m LessonModel) View() string {
 
 // viewPlaying renders the current challenge with footer.
 func (m LessonModel) viewPlaying() string {
-	header := headerStyle.Render(fmt.Sprintf("Round %d / %d", m.current+1, len(m.lesson.Rounds)))
-	tmpl := m.lesson.Rounds[m.current].Template
-	tmplLine := templateStyle.Render(tmpl.String())
+	var headerStr string
+	var tmplLine string
+	if m.lesson != nil {
+		headerStr = headerStyle.Render(fmt.Sprintf("Round %d / %d", m.current+1, len(m.lesson.Rounds)))
+		tmplLine = templateStyle.Render(m.lesson.Rounds[m.current].Template.String())
+	} else if m.stream != nil {
+		headerStr = headerStyle.Render(fmt.Sprintf("Round %d", m.current+1))
+		tmplLine = templateStyle.Render(fmt.Sprintf("Frontier: %s", m.stream.FrontierGroup().Name))
+	} else {
+		headerStr = ""
+	}
+
 	gameView := m.game.ViewGame()
 
 	var goalLine string
@@ -900,7 +1212,7 @@ func (m LessonModel) viewPlaying() string {
 	footer := m.renderFooter()
 
 	parts := []string{
-		header,
+		headerStr,
 		tmplLine,
 		"",
 		gameView,
@@ -916,17 +1228,33 @@ func (m LessonModel) viewPlaying() string {
 
 // viewRoundDone shows the solved state and prompt to continue with footer.
 func (m LessonModel) viewRoundDone() string {
-	header := headerStyle.Render(fmt.Sprintf("Round %d / %d", m.current+1, len(m.lesson.Rounds)))
+	var headerStr string
+	if m.lesson != nil {
+		headerStr = headerStyle.Render(fmt.Sprintf("Round %d / %d", m.current+1, len(m.lesson.Rounds)))
+	} else if m.stream != nil {
+		headerStr = headerStyle.Render(fmt.Sprintf("Round %d", m.current+1))
+	} else {
+		headerStr = ""
+	}
+
 	gameView := m.game.ViewGame()
 
-	retryLabel := fmt.Sprintf("%s: retry", displayKey(m.config.Bindings.Retry))
-	advanceLabel := fmt.Sprintf("%s: next", displayKey(" "))
-	nextLine := normalStyle.Render(strings.Join([]string{retryLabel, advanceLabel}, "  ·  "))
+	var nextLine string
+	if m.lesson != nil {
+		remaining := len(m.lesson.Rounds) - m.current - 1
+		if remaining == 1 {
+			nextLine = normalStyle.Render("1 round remaining. Press space for next round.")
+		} else {
+			nextLine = normalStyle.Render(fmt.Sprintf("%d rounds remaining. Press space for next round.", remaining))
+		}
+	} else {
+		nextLine = normalStyle.Render("Press space for next round.")
+	}
 
 	footer := m.renderFooter()
 
 	parts := []string{
-		header,
+		headerStr,
 		"",
 		gameView,
 		"",
@@ -946,6 +1274,10 @@ func (m LessonModel) viewPaused() string {
 		content = m.viewPlaying()
 	case stateRoundDone:
 		content = m.viewRoundDone()
+	case stateUnlockInterstitial:
+		content = m.viewUnlockInterstitial()
+	case stateIntroRound:
+		content = m.viewIntroRound()
 	default:
 		content = m.viewPlaying()
 	}
