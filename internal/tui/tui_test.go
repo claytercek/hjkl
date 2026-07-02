@@ -26,6 +26,9 @@ func TestDefaultConfig_HasBindings(t *testing.T) {
 	if cfg.Bindings.Skip != "ctrl+n" {
 		t.Errorf("default skip key = %q, want ctrl+n", cfg.Bindings.Skip)
 	}
+	if cfg.Bindings.Retry != "ctrl+r" {
+		t.Errorf("default retry key = %q, want ctrl+r", cfg.Bindings.Retry)
+	}
 }
 
 func TestNewLesson_StartsPlaying(t *testing.T) {
@@ -261,7 +264,7 @@ func TestLessonModel_EscNotIntercepted(t *testing.T) {
 	}
 }
 
-func TestLessonModel_RetryMenuAction(t *testing.T) {
+func TestRetryRound_ClearsResult(t *testing.T) {
 	lesson := &curriculum.Lesson{
 		Rounds: []curriculum.Round{
 			{
@@ -281,13 +284,152 @@ func TestLessonModel_RetryMenuAction(t *testing.T) {
 	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	solved := m3.(LessonModel)
 
-	if solved.state != stateSummary {
-		t.Fatalf("single round solved should go to summary, got state %d", solved.state)
-	}
-
-	// Can't retry from summary directly, but verify the round result was recorded.
 	if solved.lesson.Rounds[0].Result.Keystrokes != 2 {
 		t.Fatalf("round result keystrokes = %d, want 2", solved.lesson.Rounds[0].Result.Keystrokes)
+	}
+
+	// Retry.
+	solved.retryRound()
+	if solved.lesson.Rounds[0].Result.Keystrokes != 0 {
+		t.Fatalf("after retry, round result keystrokes = %d, want 0", solved.lesson.Rounds[0].Result.Keystrokes)
+	}
+	if solved.state != statePlaying {
+		t.Fatalf("after retry, state = %d, want statePlaying", solved.state)
+	}
+}
+
+func TestLessonModel_RetryKey_MidRound(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Move to col 1 so the session has some keystrokes logged.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	afterMove := m2.(LessonModel)
+
+	if afterMove.game.session.State().Cursor.Col != 1 {
+		t.Fatalf("after l, cursor col = %d, want 1", afterMove.game.session.State().Cursor.Col)
+	}
+
+	// Press ctrl+r to retry mid-round.
+	m3, _ := afterMove.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	retried := m3.(LessonModel)
+
+	// Cursor should be back at initial position.
+	if retried.game.session.State().Cursor.Col != 0 {
+		t.Fatalf("after retry, cursor col = %d, want 0", retried.game.session.State().Cursor.Col)
+	}
+	// Keystroke count should be reset (empty keystrokes).
+	if len(retried.game.keystrokes) != 0 {
+		t.Fatalf("after retry, keystrokes count = %d, want 0", len(retried.game.keystrokes))
+	}
+	// State should be playing.
+	if retried.state != statePlaying {
+		t.Fatalf("after retry, state = %d, want statePlaying", retried.state)
+	}
+}
+
+func TestLessonModel_RetryKey_RoundDone(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+			{
+				Challenge: challenge.New(
+					buffer("def"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 1),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Solve the first round (2 l's) to reach stateRoundDone.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	solved := m3.(LessonModel)
+
+	if solved.state != stateRoundDone {
+		t.Fatalf("after solving first of two rounds, state = %d, want stateRoundDone", solved.state)
+	}
+
+	// Press ctrl+r from round-done screen.
+	m4, _ := solved.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	retried := m4.(LessonModel)
+
+	// Should still be on the same round (current == 0).
+	if retried.current != 0 {
+		t.Fatalf("after retry, current = %d, want 0", retried.current)
+	}
+	// Cursor should be back at initial position.
+	if retried.game.session.State().Cursor.Col != 0 {
+		t.Fatalf("after retry from round-done, cursor col = %d, want 0", retried.game.session.State().Cursor.Col)
+	}
+	// State should be playing again.
+	if retried.state != statePlaying {
+		t.Fatalf("after retry from round-done, state = %d, want statePlaying", retried.state)
+	}
+	// Round result should be cleared.
+	if retried.lesson.Rounds[0].Result.Keystrokes != 0 {
+		t.Fatalf("after retry, round result keystrokes = %d, want 0", retried.lesson.Rounds[0].Result.Keystrokes)
+	}
+}
+
+func TestLessonModel_RetryKey_IgnoredOnSummary(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Solve the single round → stateSummary.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	summary := m3.(LessonModel)
+
+	if summary.state != stateSummary {
+		t.Fatalf("after solving single round, state = %d, want stateSummary", summary.state)
+	}
+	// Verify result was recorded before retry.
+	if summary.lesson.Rounds[0].Result.Keystrokes != 2 {
+		t.Fatalf("round result keystrokes = %d, want 2", summary.lesson.Rounds[0].Result.Keystrokes)
+	}
+
+	// Press ctrl+r from summary — should be a no-op.
+	m4, _ := summary.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	stillSummary := m4.(LessonModel)
+
+	if stillSummary.state != stateSummary {
+		t.Fatalf("after retry from summary, state = %d, want stateSummary (unchanged)", stillSummary.state)
+	}
+	if stillSummary.current != 0 {
+		t.Fatalf("after retry from summary, current = %d, want 0", stillSummary.current)
 	}
 }
 
@@ -349,6 +491,7 @@ func TestDisplayKey(t *testing.T) {
 		{"ctrl+c", "Ctrl-C"},
 		{"ctrl+h", "Ctrl-H"},
 		{"ctrl+n", "Ctrl-N"},
+		{"ctrl+r", "Ctrl-R"},
 	}
 
 	for _, tt := range tests {
@@ -554,40 +697,6 @@ func TestSkipRound_LastRoundGoesToSummary(t *testing.T) {
 	// Result should record a skip.
 	if m.lesson.Rounds[0].Result.Keystrokes != 0 {
 		t.Fatalf("skipped round keystrokes = %d, want 0", m.lesson.Rounds[0].Result.Keystrokes)
-	}
-}
-
-func TestRetryRound_ClearsResult(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
-
-	// Solve the round.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	solved := m3.(LessonModel)
-
-	if solved.lesson.Rounds[0].Result.Keystrokes != 2 {
-		t.Fatalf("round result keystrokes = %d, want 2", solved.lesson.Rounds[0].Result.Keystrokes)
-	}
-
-	// Retry.
-	solved.retryRound()
-	if solved.lesson.Rounds[0].Result.Keystrokes != 0 {
-		t.Fatalf("after retry, round result keystrokes = %d, want 0", solved.lesson.Rounds[0].Result.Keystrokes)
-	}
-	if solved.state != statePlaying {
-		t.Fatalf("after retry, state = %d, want statePlaying", solved.state)
 	}
 }
 

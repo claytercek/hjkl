@@ -29,6 +29,7 @@ type KeyBindings struct {
 	Pause string // toggle pause overlay (default "ctrl+c")
 	Hint  string // reveal next optimal keystroke (default "ctrl+h")
 	Skip  string // skip current round (default "ctrl+n")
+	Retry string // retry current challenge (default "ctrl+r")
 }
 
 // DefaultBindings returns the default key bindings.
@@ -37,6 +38,7 @@ func DefaultBindings() KeyBindings {
 		Pause: "ctrl+c",
 		Hint:  "ctrl+h",
 		Skip:  "ctrl+n",
+		Retry: "ctrl+r",
 	}
 }
 
@@ -677,6 +679,12 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case msg.String() == m.config.Bindings.Retry:
+			if m.state == statePlaying || m.state == stateRoundDone {
+				m.retryRound()
+				return m, nil
+			}
+
 		case msg.String() == m.config.Bindings.Skip:
 			m.skipRound()
 			return m, nil
@@ -895,13 +903,9 @@ func (m LessonModel) viewRoundDone() string {
 	header := headerStyle.Render(fmt.Sprintf("Round %d / %d", m.current+1, len(m.lesson.Rounds)))
 	gameView := m.game.ViewGame()
 
-	remaining := len(m.lesson.Rounds) - m.current - 1
-	var nextLine string
-	if remaining == 1 {
-		nextLine = normalStyle.Render("1 round remaining. Press space for next round.")
-	} else {
-		nextLine = normalStyle.Render(fmt.Sprintf("%d rounds remaining. Press space for next round.", remaining))
-	}
+	retryLabel := fmt.Sprintf("%s: retry", displayKey(m.config.Bindings.Retry))
+	advanceLabel := fmt.Sprintf("%s: next", displayKey(" "))
+	nextLine := normalStyle.Render(strings.Join([]string{retryLabel, advanceLabel}, "  ·  "))
 
 	footer := m.renderFooter()
 
@@ -976,11 +980,12 @@ func (m LessonModel) viewSummary() string {
 // renderFooter renders the footer hotkey strip.
 func (m LessonModel) renderFooter() string {
 	b := m.config.Bindings
+	retryLabel := fmt.Sprintf("%s: Retry", displayKey(b.Retry))
 	hintLabel := fmt.Sprintf("%s: Hint", displayKey(b.Hint))
 	skipLabel := fmt.Sprintf("%s: Skip", displayKey(b.Skip))
 	pauseLabel := fmt.Sprintf("%s: Menu", displayKey(b.Pause))
 
-	return footerStyle.Render(strings.Join([]string{hintLabel, skipLabel, pauseLabel}, "  |  "))
+	return footerStyle.Render(strings.Join([]string{retryLabel, hintLabel, skipLabel, pauseLabel}, "  |  "))
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,6 +1009,8 @@ func displayKey(k string) string {
 		return "Ctrl-H"
 	case "ctrl+n":
 		return "Ctrl-N"
+	case "ctrl+r":
+		return "Ctrl-R"
 	default:
 		return k
 	}
