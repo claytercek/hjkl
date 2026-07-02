@@ -993,6 +993,46 @@ func (m LessonModel) viewSummary() string {
 	return b.String()
 }
 
+// viewBestProgress renders the historical bests and mastery section of the summary.
+func (m LessonModel) viewBestProgress() string {
+	if len(m.progress.BestScores) == 0 && len(m.progress.Mastery) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(summaryLabelStyle.Render("Progress") + "\n")
+
+	// Collect all group keys present in progress.
+	keys := make(map[store.GroupKey]bool)
+	for k := range m.progress.BestScores {
+		keys[k] = true
+	}
+	for k := range m.progress.Mastery {
+		keys[k] = true
+	}
+
+	for key := range keys {
+		groupLabel := templateStyle.Render(string(key))
+
+		// Best score line.
+		if bs, ok := m.progress.BestScores[key]; ok && bs.Stars > 0 {
+			bsLine := fmt.Sprintf("  %s  best: you %d — par %d  %s",
+				groupLabel, bs.Keystrokes, bs.Par, starLineShort(bs.Stars))
+			b.WriteString(bestLabelStyle.Render(bsLine) + "\n")
+		}
+
+		// Mastery line.
+		if mv, ok := m.progress.Mastery[key]; ok && mv.Rounds > 0 {
+			pct := int(mv.Value * 100)
+			mvLine := fmt.Sprintf("  %s  mastery: %d%% (%d rounds)",
+				groupLabel, pct, mv.Rounds)
+			b.WriteString(masteryLabelStyle.Render(mvLine) + "\n")
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
 // renderFooter renders the footer hotkey strip.
 func (m LessonModel) renderFooter() string {
 	b := m.config.Bindings
