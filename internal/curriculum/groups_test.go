@@ -242,3 +242,82 @@ func TestFrontierProgress_NearThreshold(t *testing.T) {
 		t.Fatalf("ratio = %f, want %f", ratio, expected)
 	}
 }
+
+func TestUnlockedVocabulary_AllUnlocked(t *testing.T) {
+	mastery := map[string]float64{
+		"wbe": 0.8,
+		"0^$": 0.75,
+		"ft;": 0.9,
+		"ggG": 0.85,
+		"WBE": 0.95,
+	}
+	vocab := curriculum.UnlockedVocabulary(mastery)
+	if len(vocab) == 0 {
+		t.Fatal("expected non-empty vocabulary")
+	}
+	// Should include all group keys.
+	allKeys := map[string]bool{}
+	for _, g := range curriculum.Groups {
+		for _, k := range g.Keys {
+			allKeys[k] = true
+		}
+	}
+	for _, k := range vocab {
+		delete(allKeys, k)
+	}
+	if len(allKeys) > 0 {
+		t.Errorf("missing keys: %v", allKeys)
+	}
+}
+
+func TestUnlockedVocabulary_NothingUnlocked(t *testing.T) {
+	// Starting group is always unlocked.
+	vocab := curriculum.UnlockedVocabulary(map[string]float64{})
+	if len(vocab) != 4 {
+		t.Fatalf("expected 4 keys (hjkl), got %d: %v", len(vocab), vocab)
+	}
+	for _, k := range []string{"h", "j", "k", "l"} {
+		found := false
+		for _, v := range vocab {
+			if v == k {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing key %q", k)
+		}
+	}
+}
+
+func TestUnlockedVocabulary_OnlyFirstUnlocked(t *testing.T) {
+	mastery := map[string]float64{"wbe": 0.8}
+	vocab := curriculum.UnlockedVocabulary(mastery)
+	// Should include hjkl + wbe keys.
+	expected := []string{"h", "j", "k", "l", "w", "b", "e"}
+	if len(vocab) != len(expected) {
+		t.Fatalf("expected %d keys, got %d: %v", len(expected), len(vocab), vocab)
+	}
+}
+
+func TestTemplatesForGroup_Hjkl(t *testing.T) {
+	templates := curriculum.TemplatesForGroup("hjkl")
+	if len(templates) != 2 {
+		t.Fatalf("expected 2 templates for hjkl, got %d", len(templates))
+	}
+}
+
+func TestTemplatesForGroup_FtSemi(t *testing.T) {
+	templates := curriculum.TemplatesForGroup("ft;")
+	if len(templates) != 1 {
+		t.Fatalf("expected 1 template for ft;, got %d", len(templates))
+	}
+}
+
+func TestTemplatesForGroup_Unknown(t *testing.T) {
+	templates := curriculum.TemplatesForGroup("wbe")
+	// Unknown groups fall back to all templates.
+	if len(templates) == 0 {
+		t.Fatal("expected fallback templates for unknown group")
+	}
+}

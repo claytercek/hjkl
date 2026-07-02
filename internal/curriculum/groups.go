@@ -92,6 +92,21 @@ func GroupForTemplate(tmpl challenge.TemplateKind) string {
 	}
 }
 
+// TemplatesForGroup returns the challenge templates that exercise the given
+// motion group key.
+func TemplatesForGroup(groupKey string) []challenge.TemplateKind {
+	switch groupKey {
+	case "hjkl":
+		return []challenge.TemplateKind{challenge.THorizontalLine, challenge.TVerticalNavigation}
+	case "ft;":
+		return []challenge.TemplateKind{challenge.TFindCharacter}
+	default:
+		// Groups without dedicated templates (wbe, 0^$, ggG, WBE) return
+		// all available templates as a fallback.
+		return challenge.Templates()
+	}
+}
+
 // MasteryThreshold is the mastery value at which a Motion Group is considered
 // unlocked, making the next group the new frontier.
 const MasteryThreshold = 0.7
@@ -131,4 +146,34 @@ func GroupForMotion(key string) *MotionGroup {
 		}
 	}
 	return nil
+}
+
+// UnlockedVocabulary returns the full set of motion keystrokes from all
+// unlocked groups — those whose mastery >= MasteryThreshold, plus the
+// starting group which is always unlocked.
+func UnlockedVocabulary(mastery map[string]float64) []string {
+	// Groups[0] is always unlocked.
+	unlocked := make(map[string]bool)
+	for _, k := range Groups[0].Keys {
+		unlocked[k] = true
+	}
+
+	for i := 1; i < len(Groups); i++ {
+		val := mastery[Groups[i].Key]
+		if val >= MasteryThreshold {
+			for _, k := range Groups[i].Keys {
+				unlocked[k] = true
+			}
+		} else {
+			// Once we hit a group below threshold, all subsequent
+			// groups are locked too (strict unlock order).
+			break
+		}
+	}
+
+	result := make([]string, 0, len(unlocked))
+	for k := range unlocked {
+		result = append(result, k)
+	}
+	return result
 }

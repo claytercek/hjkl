@@ -2,7 +2,9 @@ package tui
 
 import (
 	"math/rand"
+	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -12,6 +14,12 @@ import (
 	"github.com/clay/hjkl/internal/store"
 	"github.com/clay/hjkl/internal/vim"
 )
+
+// testGenerator creates a deterministic generator for tests.
+func testGenerator(seed int64) *challenge.Generator {
+	rng := rand.New(rand.NewSource(seed))
+	return challenge.NewGenerator(rng, challenge.SolverFunc(solver.Solve), challenge.NavigationVocabulary, solver.DefaultMaxDepth)
+}
 
 // buffer is a shorthand for creating a Buffer with the given lines.
 func buffer(lines ...string) vim.Buffer {
@@ -34,123 +42,62 @@ func TestDefaultConfig_HasBindings(t *testing.T) {
 	}
 }
 
-func TestNewLesson_StartsPlaying(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestNewStream_StartsPlaying(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 	if m.state != statePlaying {
 		t.Fatalf("initial state = %d, want statePlaying", m.state)
 	}
-	if m.current != 0 {
-		t.Fatalf("initial current = %d, want 0", m.current)
+	if m.game.Solved() {
+		t.Fatal("initial challenge should not be solved")
 	}
 }
 
-func TestLessonModel_KeystrokeAdvancesSession(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_KeystrokeAdvancesSession(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Send an 'l' keystroke.
+	// Send an 'l' keystroke (hjkl is always unlocked).
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	updated := m2.(LessonModel)
-	if updated.game.session.State().Cursor.Col != 1 {
-		t.Fatalf("after l, cursor col = %d, want 1", updated.game.session.State().Cursor.Col)
-	}
+	updated := m2.(StreamModel)
+
 	if updated.state != statePlaying {
 		t.Fatalf("state = %d, want statePlaying", updated.state)
 	}
-
-	// Send another 'l' to solve.
-	m3, _ := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	solved := m3.(LessonModel)
-	if !solved.game.Solved() {
-		t.Fatal("expected session to be solved after 2 l's")
-	}
-	if solved.state != stateSummary {
-		t.Fatalf("after final round solved, state = %d, want stateSummary", solved.state)
-	}
 }
 
-func TestLessonModel_SkipKey(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-			{
-				Challenge: challenge.New(
-					buffer("def"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 1),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_SkipKey(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Skip the first round.
-	cfg := DefaultConfig()
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	initialCompleted := len(m.completed)
 
-	// The Skip key is "ctrl+n" — we need to simulate it properly.
-	// In Bubble Tea, ctrl+n is represented as a KeyMsg with Type tea.KeyCtrlN.
-	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyCtrlN})
-	skipped := m3.(LessonModel)
+	// Skip the current challenge.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	skipped := m2.(StreamModel)
 
 	if skipped.state != statePlaying {
 		t.Fatalf("after skip, state = %d, want statePlaying", skipped.state)
 	}
-	if skipped.current != 1 {
-		t.Fatalf("after skip, current = %d, want 1", skipped.current)
+	if len(skipped.completed) != initialCompleted+1 {
+		t.Fatalf("after skip, completed = %d, want %d", len(skipped.completed), initialCompleted+1)
 	}
-	_ = cfg // used for reference
+	last := skipped.completed[len(skipped.completed)-1]
+	if last.Keystrokes != 0 {
+		t.Fatalf("skipped round keystrokes = %d, want 0", last.Keystrokes)
+	}
 }
 
-func TestLessonModel_HintKey(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_HintKey(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Press Ctrl-H to get hint.
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
-	hinted := m2.(LessonModel)
+	hinted := m2.(StreamModel)
 
 	if !hinted.game.hintVisible {
 		t.Fatal("expected hint to be visible after Ctrl-H")
@@ -160,24 +107,13 @@ func TestLessonModel_HintKey(t *testing.T) {
 	}
 }
 
-func TestLessonModel_PauseToggle(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_PauseToggle(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Press Ctrl-C to pause.
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	paused := m2.(LessonModel)
+	paused := m2.(StreamModel)
 
 	if !paused.paused {
 		t.Fatal("expected paused to be true after Ctrl-C")
@@ -186,37 +122,25 @@ func TestLessonModel_PauseToggle(t *testing.T) {
 		t.Fatalf("menu cursor = %d, want 0", paused.menuCursor)
 	}
 
-	// Press Ctrl-C again to resume.
 	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	resumed := m3.(LessonModel)
+	resumed := m3.(StreamModel)
 
 	if resumed.paused {
 		t.Fatal("expected paused to be false after second Ctrl-C")
 	}
 }
 
-func TestLessonModel_MenuNavigation(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_MenuNavigation(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Pause.
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	paused := m2.(LessonModel)
+	paused := m2.(StreamModel)
 
 	// Navigate down with 'j'.
 	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	down := m3.(LessonModel)
+	down := m3.(StreamModel)
 
 	if down.menuCursor != 1 {
 		t.Fatalf("after j, menu cursor = %d, want 1", down.menuCursor)
@@ -224,7 +148,7 @@ func TestLessonModel_MenuNavigation(t *testing.T) {
 
 	// Navigate up with 'k'.
 	m4, _ := down.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	up := m4.(LessonModel)
+	up := m4.(StreamModel)
 
 	if up.menuCursor != 0 {
 		t.Fatalf("after k, menu cursor = %d, want 0", up.menuCursor)
@@ -232,229 +156,141 @@ func TestLessonModel_MenuNavigation(t *testing.T) {
 
 	// Select Resume with Enter.
 	m5, _ := up.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	resumed := m5.(LessonModel)
+	resumed := m5.(StreamModel)
 
 	if resumed.paused {
 		t.Fatal("expected paused to be false after Resume")
 	}
 }
 
-func TestLessonModel_EscNotIntercepted(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abcde"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_EscNotIntercepted(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Esc should be passed through to the game (no-op in vim step).
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEscape})
-	after := m2.(LessonModel)
+	after := m2.(StreamModel)
 
 	if after.state != statePlaying {
 		t.Fatalf("after esc, state = %d, want statePlaying", after.state)
 	}
-	// Session should not have quit.
 	if after.game.Solved() {
 		t.Fatal("session should not be solved after esc")
 	}
 }
 
-func TestRetryRound_ClearsResult(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_RetryKey_MidRound(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Solve the round.
+	initialCol := m.game.session.State().Cursor.Col
+
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	solved := m3.(LessonModel)
+	afterMove := m2.(StreamModel)
 
-	if solved.lesson.Rounds[0].Result.Keystrokes != 2 {
-		t.Fatalf("round result keystrokes = %d, want 2", solved.lesson.Rounds[0].Result.Keystrokes)
-	}
-
-	// Retry.
-	solved.retryRound()
-	if solved.lesson.Rounds[0].Result.Keystrokes != 0 {
-		t.Fatalf("after retry, round result keystrokes = %d, want 0", solved.lesson.Rounds[0].Result.Keystrokes)
-	}
-	if solved.state != statePlaying {
-		t.Fatalf("after retry, state = %d, want statePlaying", solved.state)
-	}
-}
-
-func TestLessonModel_RetryKey_MidRound(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
-
-	// Move to col 1 so the session has some keystrokes logged.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	afterMove := m2.(LessonModel)
-
-	if afterMove.game.session.State().Cursor.Col != 1 {
-		t.Fatalf("after l, cursor col = %d, want 1", afterMove.game.session.State().Cursor.Col)
-	}
-
-	// Press ctrl+r to retry mid-round.
 	m3, _ := afterMove.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-	retried := m3.(LessonModel)
+	retried := m3.(StreamModel)
 
-	// Cursor should be back at initial position.
-	if retried.game.session.State().Cursor.Col != 0 {
-		t.Fatalf("after retry, cursor col = %d, want 0", retried.game.session.State().Cursor.Col)
+	if retried.game.session.State().Cursor.Col != initialCol {
+		t.Fatalf("after retry, cursor col = %d, want %d", retried.game.session.State().Cursor.Col, initialCol)
 	}
-	// Keystroke count should be reset (empty keystrokes).
-	if len(retried.game.keystrokes) != 0 {
-		t.Fatalf("after retry, keystrokes count = %d, want 0", len(retried.game.keystrokes))
-	}
-	// State should be playing.
 	if retried.state != statePlaying {
 		t.Fatalf("after retry, state = %d, want statePlaying", retried.state)
 	}
 }
 
-func TestLessonModel_RetryKey_RoundDone(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-			{
-				Challenge: challenge.New(
-					buffer("def"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 1),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_SkipAutoAdvances(t *testing.T) {
+	// Skipping a challenge auto-advances to the next one, staying in playing state.
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Solve the first round (2 l's) to reach stateRoundDone.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	solved := m3.(LessonModel)
+	initialCount := len(m.completed)
 
-	if solved.state != stateRoundDone {
-		t.Fatalf("after solving first of two rounds, state = %d, want stateRoundDone", solved.state)
-	}
+	// Skip the challenge.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	m = m2.(StreamModel)
 
-	// Press ctrl+r from round-done screen.
-	m4, _ := solved.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-	retried := m4.(LessonModel)
-
-	// Should still be on the same round (current == 0).
-	if retried.current != 0 {
-		t.Fatalf("after retry, current = %d, want 0", retried.current)
+	// Should still be playing and completed count incremented.
+	if m.state != statePlaying {
+		t.Fatalf("after skip, state = %d, want statePlaying", m.state)
 	}
-	// Cursor should be back at initial position.
-	if retried.game.session.State().Cursor.Col != 0 {
-		t.Fatalf("after retry from round-done, cursor col = %d, want 0", retried.game.session.State().Cursor.Col)
+	if len(m.completed) != initialCount+1 {
+		t.Fatalf("after skip, completed = %d, want %d", len(m.completed), initialCount+1)
 	}
-	// State should be playing again.
-	if retried.state != statePlaying {
-		t.Fatalf("after retry from round-done, state = %d, want statePlaying", retried.state)
-	}
-	// Round result should be cleared.
-	if retried.lesson.Rounds[0].Result.Keystrokes != 0 {
-		t.Fatalf("after retry, round result keystrokes = %d, want 0", retried.lesson.Rounds[0].Result.Keystrokes)
+	// Challenge should be different (new cursor position, new buffer).
+	if len(m.completed) > 0 {
+		last := m.completed[len(m.completed)-1]
+		if last.Keystrokes != 0 {
+			t.Fatalf("skipped challenge keystrokes = %d, want 0", last.Keystrokes)
+		}
 	}
 }
 
-func TestLessonModel_RetryKey_IgnoredOnSummary(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_QuitShowsSummary(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Solve the single round → stateSummary.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	summary := m3.(LessonModel)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(StreamModel)
 
-	if summary.state != stateSummary {
-		t.Fatalf("after solving single round, state = %d, want stateSummary", summary.state)
-	}
-	// Verify result was recorded before retry.
-	if summary.lesson.Rounds[0].Result.Keystrokes != 2 {
-		t.Fatalf("round result keystrokes = %d, want 2", summary.lesson.Rounds[0].Result.Keystrokes)
+	for i := 0; i < 4; i++ {
+		var tmp tea.Model
+		tmp, _ = paused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		paused = tmp.(StreamModel)
 	}
 
-	// Press ctrl+r from summary — should be a no-op.
-	m4, _ := summary.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
-	stillSummary := m4.(LessonModel)
+	// Select Quit from menu — transitions to summary, does not quit directly.
+	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	quitResult := m3.(StreamModel)
 
-	if stillSummary.state != stateSummary {
-		t.Fatalf("after retry from summary, state = %d, want stateSummary (unchanged)", stillSummary.state)
+	if quitResult.state != stateSummary {
+		t.Fatalf("after Quit, state = %d, want stateSummary", quitResult.state)
 	}
-	if stillSummary.current != 0 {
-		t.Fatalf("after retry from summary, current = %d, want 0", stillSummary.current)
+
+	// From summary, pressing 'q' should quit.
+	_, cmd := quitResult.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd after 'q' from summary")
+	}
+
+	view := quitResult.View()
+	if view == "" {
+		t.Fatal("summary view should not be empty")
 	}
 }
 
-func TestLessonModel_AnimationsCreateTick(t *testing.T) {
-	// After a keystroke, there should be a tick command for animations.
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_QuitFromSummary(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Press 'l' — should create ghosts and tick.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(StreamModel)
+	for i := 0; i < 4; i++ {
+		var tmp tea.Model
+		tmp, _ = paused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		paused = tmp.(StreamModel)
+	}
+	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	summary := m3.(StreamModel)
+
+	m4, cmd := summary.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd after 'q' in summary")
+	}
+	_ = m4
+}
+
+func TestStreamModel_AnimationsCreateTick(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
+
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	after := m2.(LessonModel)
+	after := m2.(StreamModel)
 
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd (tick) after keystroke")
@@ -470,7 +306,7 @@ func TestGameModel_ReducedMotionNoGhosts(t *testing.T) {
 		vim.Cursor{Row: 0, Col: 0},
 		challenge.CursorAtTarget(0, 2),
 	)
-	gm := NewGame(c, DefaultBindings(), true) // reducedMotion = true
+	gm := NewGame(c, DefaultBindings(), true)
 
 	gm2, _ := gm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	after := gm2
@@ -512,37 +348,37 @@ func TestInterpolate(t *testing.T) {
 		name string
 		from vim.Cursor
 		to   vim.Cursor
-		want int // number of positions
+		want int
 	}{
 		{
 			name: "horizontal right",
 			from: vim.Cursor{Row: 0, Col: 0},
 			to:   vim.Cursor{Row: 0, Col: 3},
-			want: 4, // cols 0,1,2,3
+			want: 4,
 		},
 		{
 			name: "horizontal left",
 			from: vim.Cursor{Row: 0, Col: 3},
 			to:   vim.Cursor{Row: 0, Col: 0},
-			want: 4, // cols 0,1,2,3
+			want: 4,
 		},
 		{
 			name: "vertical down",
 			from: vim.Cursor{Row: 0, Col: 1},
 			to:   vim.Cursor{Row: 1, Col: 1},
-			want: 2, // rows 0,1
+			want: 2,
 		},
 		{
 			name: "vertical up",
 			from: vim.Cursor{Row: 1, Col: 1},
 			to:   vim.Cursor{Row: 0, Col: 1},
-			want: 2, // rows 0,1
+			want: 2,
 		},
 		{
 			name: "no movement",
 			from: vim.Cursor{Row: 0, Col: 2},
 			to:   vim.Cursor{Row: 0, Col: 2},
-			want: 1, // same position
+			want: 1,
 		},
 	}
 
@@ -552,7 +388,6 @@ func TestInterpolate(t *testing.T) {
 			if len(got) != tt.want {
 				t.Errorf("interpolate returned %d positions, want %d", len(got), tt.want)
 			}
-			// First and last should match from/to.
 			if got[0] != tt.from {
 				t.Errorf("first position = %v, want %v", got[0], tt.from)
 			}
@@ -570,54 +405,27 @@ func TestViewGame_DoesNotCrash(t *testing.T) {
 		challenge.CursorAtTarget(0, 6),
 	)
 	gm := NewGame(c, DefaultBindings(), false)
-	_ = gm.ViewGame() // should not panic
+	_ = gm.ViewGame()
 
-	// After a keystroke, view should also not panic.
 	gm2, _ := gm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
 	_ = gm2.ViewGame()
 }
 
-func TestLessonView_DoesNotCrash(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
-	_ = m.View() // should not panic
-
-	// After solving.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	_ = m3.(LessonModel).View() // should not panic
+func TestStreamView_DoesNotCrash(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
+	_ = m.View()
 }
 
 func TestMenuView_DoesNotCrash(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Pause and view.
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	paused := m2.(LessonModel)
-	_ = paused.View() // should not panic
+	paused := m2.(StreamModel)
+	_ = paused.View()
 }
 
 func TestApplyKeystroke_WastedKeyDetection(t *testing.T) {
@@ -628,23 +436,19 @@ func TestApplyKeystroke_WastedKeyDetection(t *testing.T) {
 	)
 	gm := NewGame(c, DefaultBindings(), false)
 
-	// A move that doesn't reduce optimal distance (e.g., 'h' when at col 0)
-	// should register as wasted.
 	gm.applyKeystroke("h")
 	if gm.wasteFrames <= 0 {
 		t.Fatal("expected wasteFrames > 0 after wasted key (h at col 0)")
 	}
 
-	// Reset for next test.
 	gm = NewGame(c, DefaultBindings(), false)
-	// A move that makes progress (l) should not be wasted.
 	gm.applyKeystroke("l")
 	if gm.wasteFrames > 0 {
 		t.Fatal("expected wasteFrames == 0 after progress key (l)")
 	}
 }
 
-func TestNewLessonWithConfig_CustomBindings(t *testing.T) {
+func TestNewStreamWithConfig_CustomBindings(t *testing.T) {
 	cfg := Config{
 		Bindings: KeyBindings{
 			Pause: "ctrl+p",
@@ -653,19 +457,9 @@ func TestNewLessonWithConfig_CustomBindings(t *testing.T) {
 		},
 		ReducedMotion: true,
 	}
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLessonWithConfig(lesson, cfg)
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil, cfg)
 
 	if !m.config.ReducedMotion {
 		t.Fatal("expected ReducedMotion to be true")
@@ -678,67 +472,53 @@ func TestNewLessonWithConfig_CustomBindings(t *testing.T) {
 	}
 }
 
-func TestSkipRound_LastRoundGoesToSummary(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
-	m.skipRound()
+func TestStreamModel_MultipleSkips(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	if m.state != stateSummary {
-		t.Fatalf("after skip on last round, state = %d, want stateSummary", m.state)
+	for i := 0; i < 3; i++ {
+		m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+		m = m2.(StreamModel)
+		if m.state != statePlaying {
+			t.Fatalf("after skip %d, state = %d, want statePlaying", i+1, m.state)
+		}
 	}
-	// Result should record a skip.
-	if m.lesson.Rounds[0].Result.Keystrokes != 0 {
-		t.Fatalf("skipped round keystrokes = %d, want 0", m.lesson.Rounds[0].Result.Keystrokes)
+
+	if len(m.completed) != 3 {
+		t.Fatalf("after 3 skips, completed = %d, want 3", len(m.completed))
 	}
 }
 
-func TestRestartLesson_ClearsAllResults(t *testing.T) {
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.New(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-				),
-				Template: challenge.THorizontalLine,
-			},
-			{
-				Challenge: challenge.New(
-					buffer("def"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 1),
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
+func TestStreamModel_RestartSession(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Simulate playing and recording results.
-	m.lesson.Rounds[0].Result.Keystrokes = 3
-	m.lesson.Rounds[1].Result.Keystrokes = 2
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	m = m2.(StreamModel)
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	m = m2.(StreamModel)
 
-	m.restartLesson()
-	if m.lesson.Rounds[0].Result.Keystrokes != 0 {
-		t.Fatalf("after restart, round 0 keystrokes = %d, want 0", m.lesson.Rounds[0].Result.Keystrokes)
+	if len(m.completed) != 2 {
+		t.Fatalf("before restart, completed = %d, want 2", len(m.completed))
 	}
-	if m.lesson.Rounds[1].Result.Keystrokes != 0 {
-		t.Fatalf("after restart, round 1 keystrokes = %d, want 0", m.lesson.Rounds[1].Result.Keystrokes)
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(StreamModel)
+	for i := 0; i < 3; i++ {
+		var tmp tea.Model
+		tmp, _ = paused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		paused = tmp.(StreamModel)
 	}
-	if m.current != 0 {
-		t.Fatalf("after restart, current = %d, want 0", m.current)
+	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	restarted := m3.(StreamModel)
+
+	if len(restarted.completed) != 0 {
+		t.Fatalf("after restart, completed = %d, want 0", len(restarted.completed))
+	}
+	if restarted.state != statePlaying {
+		t.Fatalf("after restart, state = %d, want statePlaying", restarted.state)
 	}
 }
 
@@ -763,7 +543,6 @@ func TestAdvanceAnimations_DecrementsCounters(t *testing.T) {
 	if gm.successFrames != 9 {
 		t.Fatalf("successFrames = %d, want 9", gm.successFrames)
 	}
-	// Ghost with life 3 should now be 2, life 5 should be 4.
 	if len(gm.ghosts) != 2 {
 		t.Fatalf("len(ghosts) = %d, want 2", len(gm.ghosts))
 	}
@@ -775,8 +554,8 @@ func TestAdvanceAnimations_DecrementsCounters(t *testing.T) {
 func TestAdvanceAnimations_RemovesExpiredGhosts(t *testing.T) {
 	gm := GameModel{
 		ghosts: []ghostPos{
-			{row: 0, col: 0, life: 1}, // will expire
-			{row: 0, col: 1, life: 2}, // will stay
+			{row: 0, col: 0, life: 1},
+			{row: 0, col: 1, life: 2},
 		},
 		reducedMotion: false,
 	}
@@ -824,7 +603,6 @@ func TestGameModel_SolvedIgnoresKeystrokes(t *testing.T) {
 		t.Fatal("expected solved immediately")
 	}
 
-	// Keystroke should be ignored.
 	gm2, _ := gm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	after := gm2
 	if after.session.State().Cursor.Col != 2 {
@@ -941,224 +719,202 @@ func TestViewGame_WithWallDoesNotCrashOnUpdate(t *testing.T) {
 	_ = gm3.ViewGame() // should not panic
 }
 
-func TestLessonView_WithWallDoesNotCrash(t *testing.T) {
-	walls := challenge.WallSet{
-		vim.Cursor{Row: 0, Col: 1}: true,
-	}
-	lesson := &curriculum.Lesson{
-		Rounds: []curriculum.Round{
-			{
-				Challenge: challenge.NewWithWalls(
-					buffer("abc"),
-					vim.Cursor{Row: 0, Col: 0},
-					challenge.CursorAtTarget(0, 2),
-					walls,
-				),
-				Template: challenge.THorizontalLine,
-			},
-		},
-	}
-	m := NewLesson(lesson)
-	_ = m.View() // should not panic
-
-	// Keystroke lands on wall.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	_ = m2.(LessonModel).View() // should not panic
-}
-
 // ---------------------------------------------------------------------------
-// Stream mode tests
+// Unlock interstitial / intro round tests
 // ---------------------------------------------------------------------------
 
-func newTestStreamModel(seed int64, unlocked int) *curriculum.Stream {
-	rng := rand.New(rand.NewSource(seed))
-	gen := challenge.NewGenerator(rng, challenge.SolverFunc(solver.Solve), challenge.NavigationVocabulary, solver.DefaultMaxDepth)
-	rng2 := rand.New(rand.NewSource(seed + 1))
-	p := store.NewProgress()
-	return curriculum.NewStream(gen, challenge.DefaultConfig(), rng2, p, unlocked)
+// newSolvableStep1Challenge returns a trivial challenge solved by a single
+// "l" keystroke, matching its own par so the round always scores 3 stars.
+func newSolvableStep1Challenge() challenge.Challenge {
+	c := challenge.New(
+		buffer("ab"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 1),
+	)
+	c.Par = 1
+	return c
 }
 
-func TestNewLessonStream_StartsPlaying(t *testing.T) {
-	str := newTestStreamModel(42, 1)
-	m := NewLessonStream(str)
+func TestStreamModel_UnlockTriggersInterstitial(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	if m.state != statePlaying {
-		t.Fatalf("initial state = %d, want statePlaying", m.state)
+	// Unlock everything up through "0^$" so "ft;" becomes the frontier
+	// group, one good round away from crossing the mastery threshold.
+	m.progress.Mastery["wbe"] = store.Mastery{Value: 0.9, Rounds: 5}
+	m.progress.Mastery["0^$"] = store.Mastery{Value: 0.9, Rounds: 5}
+	m.progress.Mastery["ft;"] = store.Mastery{Value: curriculum.MasteryThreshold - 0.001, Rounds: 5}
+
+	m.game = NewGame(newSolvableStep1Challenge(), m.config.Bindings, m.config.ReducedMotion)
+	m.currentTemplate = challenge.TFindCharacter
+	m.game.applyKeystroke("l")
+	if !m.game.Solved() {
+		t.Fatal("expected game to be solved")
 	}
-	if m.stream == nil {
-		t.Fatal("expected stream to be set")
+
+	m.onRoundSolved()
+
+	if m.state != stateUnlockInterstitial {
+		t.Fatalf("state = %d, want stateUnlockInterstitial", m.state)
 	}
-}
-
-func TestNewLessonStream_SolvesRound(t *testing.T) {
-	str := newTestStreamModel(42, 1)
-	m := NewLessonStream(str)
-
-	// Send a keystroke. The game might solve the challenge depending on the
-	// generated challenge. Just verify we don't crash.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	after := m2.(LessonModel)
-
-	// Should still be in some valid state.
-	if after.state != statePlaying && after.state != stateRoundDone {
-		t.Fatalf("unexpected state after keystroke: %d", after.state)
-	}
-}
-
-func TestNewLessonStream_Skip(t *testing.T) {
-	str := newTestStreamModel(99, 1)
-	m := NewLessonStream(str)
-
-	// Skip should generate a new round.
-	m.skipRound()
-	if m.state != statePlaying {
-		t.Fatalf("after skip, state = %d, want statePlaying", m.state)
+	if m.pendingGroup.Key != "ft;" {
+		t.Fatalf("pendingGroup.Key = %q, want %q", m.pendingGroup.Key, "ft;")
 	}
 }
 
-func TestNewLessonStream_Retry(t *testing.T) {
-	str := newTestStreamModel(99, 1)
-	m := NewLessonStream(str)
+func TestStreamModel_InterstitialAckStartsIntroRound(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	m.retryRound()
-	if m.state != statePlaying {
-		t.Fatalf("after retry, state = %d, want statePlaying", m.state)
-	}
-}
-
-func TestNewLessonStream_HintKey(t *testing.T) {
-	str := newTestStreamModel(42, 1)
-	m := NewLessonStream(str)
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
-	hinted := m2.(LessonModel)
-
-	if hinted.state != statePlaying {
-		t.Fatalf("after hint, state = %d, want statePlaying", hinted.state)
-	}
-}
-
-func TestNewLessonStream_PauseToggle(t *testing.T) {
-	str := newTestStreamModel(42, 1)
-	m := NewLessonStream(str)
-
-	// Pause.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	paused := m2.(LessonModel)
-
-	if !paused.paused {
-		t.Fatal("expected paused to be true after Ctrl-C")
-	}
-
-	// Resume.
-	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	resumed := m3.(LessonModel)
-
-	if resumed.paused {
-		t.Fatal("expected paused to be false after second Ctrl-C")
-	}
-}
-
-func TestNewLessonStream_ViewDoesNotCrash(t *testing.T) {
-	str := newTestStreamModel(42, 1)
-	m := NewLessonStream(str)
-	_ = m.View() // should not panic
-}
-
-func TestUnlockInterstitial_View(t *testing.T) {
-	str := newTestStreamModel(42, 1)
-	m := NewLessonStream(str)
-
-	// Push mastery above threshold to trigger unlock.
-	for i := 0; i < 10; i++ {
-		m.stream.UpdateFrontierMastery(3, 3, 3)
-	}
-	if !m.stream.ShouldUnlock() {
-		t.Fatal("should be ready to unlock")
-	}
-
-	// Trigger unlock flow.
-	m.pendingGroup = m.stream.UnlockNext()
+	// Mastery must already reflect the unlock (as it would by the time
+	// onRoundSolved sets pendingGroup) so the intro round's newVocab
+	// actually includes "wbe".
+	m.progress.Mastery["wbe"] = store.Mastery{Value: curriculum.MasteryThreshold, Rounds: 5}
+	m.pendingGroup = curriculum.Groups[1] // "wbe"
 	m.state = stateUnlockInterstitial
 
-	// View should not panic.
-	_ = m.View()
+	_ = m.View() // should not panic
 
-	// Acknowledge with space.
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
-	after := m2.(LessonModel)
-	if after.state != stateIntroRound && after.state != statePlaying {
-		t.Fatalf("after ack, state = %d, want stateIntroRound or statePlaying", after.state)
+	after := m2.(StreamModel)
+	if after.state != stateIntroRound {
+		t.Fatalf("state = %d, want stateIntroRound", after.state)
+	}
+	_ = after.View() // should not panic
+}
+
+func TestStreamModel_IntroRoundSolveAndAdvance(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
+
+	m.pendingGroup = curriculum.Groups[1] // "wbe"
+	m.introGame = NewGame(newSolvableStep1Challenge(), m.config.Bindings, m.config.ReducedMotion)
+	m.currentTemplate = challenge.THorizontalLine
+	m.state = stateIntroRound
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	solved := m2.(StreamModel)
+	if !solved.introGame.Solved() {
+		t.Fatal("expected intro round to be solved")
+	}
+	if solved.state != stateIntroRound {
+		t.Fatalf("state right after solving = %d, want stateIntroRound (awaiting ack)", solved.state)
+	}
+
+	m3, _ := solved.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	final := m3.(StreamModel)
+	if final.state != statePlaying {
+		t.Fatalf("state after ack = %d, want statePlaying", final.state)
 	}
 }
 
-func TestUnlockInterstitial_AdvanceKey(t *testing.T) {
-	str := newTestStreamModel(42, 1)
-	m := NewLessonStream(str)
+func TestStreamModel_IntroRoundCanBeSkipped(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Set up unlock state.
-	for i := 0; i < 10; i++ {
-		m.stream.UpdateFrontierMastery(3, 3, 3)
-	}
-	m.pendingGroup = m.stream.UnlockNext()
-	m.state = stateUnlockInterstitial
+	m.pendingGroup = curriculum.Groups[1] // "wbe"
+	m.introGame = NewGame(newSolvableStep1Challenge(), m.config.Bindings, m.config.ReducedMotion)
+	m.currentTemplate = challenge.THorizontalLine
+	m.state = stateIntroRound
 
-	// Enter should work same as space.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	after := m2.(LessonModel)
-	if after.state != stateIntroRound && after.state != statePlaying {
-		t.Fatalf("after enter ack, state = %d, want stateIntroRound or statePlaying", after.state)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	after := m2.(StreamModel)
+	if after.state != statePlaying {
+		t.Fatalf("after skip, state = %d, want statePlaying", after.state)
 	}
 }
 
-func TestIntroRound_SkipAndView(t *testing.T) {
-	str := newTestStreamModel(99, 1)
-	m := NewLessonStream(str)
+func TestStreamModel_SummaryView(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, nil)
 
-	// Set up unlock + intro round.
-	for i := 0; i < 10; i++ {
-		m.stream.UpdateFrontierMastery(3, 3, 3)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	m = m2.(StreamModel)
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	m = m2.(StreamModel)
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(StreamModel)
+	for i := 0; i < 4; i++ {
+		var tmp tea.Model
+		tmp, _ = paused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		paused = tmp.(StreamModel)
 	}
-	m.pendingGroup = m.stream.UnlockNext()
-	m.state = stateUnlockInterstitial
+	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	summary := m3.(StreamModel)
 
-	// Acknowledge to start intro round.
-	m.startIntroRound()
-	if m.state != stateIntroRound {
-		t.Fatalf("after startIntroRound, state = %d, want stateIntroRound", m.state)
+	view := summary.View()
+	if view == "" {
+		t.Fatal("summary view should not be empty")
 	}
-
-	// View should not panic.
-	_ = m.View()
-
-	// Skip the intro round.
-	m.skipRound()
-	if m.state != statePlaying {
-		t.Fatalf("after skip intro round, state = %d, want statePlaying", m.state)
+	// The summary view includes styled text; check for the plain-text parts.
+	if !strings.Contains(view, "Practice Complete") {
+		t.Fatalf("summary view should contain 'Practice Complete', got:\n%s", view)
+	}
+	if !strings.Contains(view, "Session Total") {
+		t.Fatalf("summary view should contain 'Session Total', got:\n%s", view)
 	}
 }
 
-func TestSaveProgress_IncludesUnlockedCount(t *testing.T) {
+func TestStreamModel_ProgressPersistence(t *testing.T) {
 	dir := t.TempDir()
-	progressPath := dir + "/progress.json"
+	fs := store.NewFileStoreWithPaths(
+		dir+"/config.toml",
+		dir+"/progress.json",
+	)
 
-	str := newTestStreamModel(42, 1)
-	fs := store.NewFileStoreWithPaths(dir+"/config.toml", progressPath)
-	m := NewLessonStream(str, fs)
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	m := NewStream(gen, rng, fs)
 
-	// Push mastery and unlock.
-	for i := 0; i < 10; i++ {
-		m.stream.UpdateFrontierMastery(3, 3, 3)
-	}
-	m.pendingGroup = m.stream.UnlockNext()
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	_ = m2.(StreamModel)
 
-	m.saveProgress()
-
-	loaded, err := fs.LoadProgress()
+	p, err := fs.LoadProgress()
 	if err != nil {
-		t.Fatalf("LoadProgress error: %v", err)
+		t.Fatalf("LoadProgress: %v", err)
 	}
-	if loaded.UnlockedCount != 2 {
-		t.Errorf("UnlockedCount = %d, want 2", loaded.UnlockedCount)
+	if p.Version != 2 {
+		t.Fatalf("Version = %d, want 2", p.Version)
+	}
+}
+
+func TestChallengeStream_Next(t *testing.T) {
+	gen := testGenerator(42)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	stream := NewChallengeStream(gen, rng, challenge.DefaultConfig())
+
+	mastery := map[string]float64{}
+	c, tmpl, err := stream.Next(mastery)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if c.Par < 0 {
+		t.Fatalf("challenge par = %d, want solvable", c.Par)
+	}
+	if tmpl < challenge.THorizontalLine || tmpl > challenge.TFindCharacter {
+		t.Fatalf("unexpected template %d", tmpl)
+	}
+}
+
+func TestMasteryFloatMap(t *testing.T) {
+	mastery := map[store.GroupKey]store.Mastery{
+		"hjkl": {Value: 0.9, Rounds: 5},
+		"wbe":  {Value: 0.3, Rounds: 2},
+	}
+	result := masteryFloatMap(mastery)
+	if len(result) != 2 {
+		t.Fatalf("len = %d, want 2", len(result))
+	}
+	if result["hjkl"] != 0.9 {
+		t.Fatalf("hjkl = %f, want 0.9", result["hjkl"])
+	}
+	if result["wbe"] != 0.3 {
+		t.Fatalf("wbe = %f, want 0.3", result["wbe"])
 	}
 }

@@ -309,7 +309,7 @@ func TestFileStore_SaveCreatesDirs(t *testing.T) {
 
 	fs := NewFileStoreWithPaths(filepath.Join(dir, "config.toml"), deepPath)
 	p := NewProgress()
-	p.BestScores["test"] = BestScore{Keystrokes: 5, Par: 5, Stars: 3}
+	p.BestScores["hjkl"] = BestScore{Keystrokes: 5, Par: 5, Stars: 3}
 
 	if err := fs.SaveProgress(p); err != nil {
 		t.Fatalf("SaveProgress: %v", err)

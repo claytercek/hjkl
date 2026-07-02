@@ -491,6 +491,16 @@ func Templates() []TemplateKind {
 	return []TemplateKind{THorizontalLine, TVerticalNavigation, TFindCharacter}
 }
 
+// Solver returns the solver used by this generator.
+func (g *Generator) Solver() Solver {
+	return g.solver
+}
+
+// MaxDepth returns the max BFS depth used by this generator.
+func (g *Generator) MaxDepth() int {
+	return g.maxDepth
+}
+
 // absDiff returns the absolute difference between two integers.
 func absDiff(a, b int) int {
 	if a > b {
