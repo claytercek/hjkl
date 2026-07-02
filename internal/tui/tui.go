@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,6 +36,12 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("#ff8"))
 
+	starStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ff0"))
+
+	parInfoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#aaa"))
+
 	normalStyle = lipgloss.NewStyle()
 )
 
@@ -43,21 +50,21 @@ const maxKeystrokes = 20
 // Model is the Bubble Tea model for the hjkl TUI.
 type Model struct {
 	session    *session.Session
-	challenge   challenge.Challenge
-	goalRow     int
-	goalCol     int
-	keystrokes  []string // recent keystrokes for the keycast strip
+	challenge  challenge.Challenge
+	goalRow    int
+	goalCol    int
+	keystrokes []string // recent keystrokes for the keycast strip
 }
 
 // New creates a new Model for the given Challenge.
-func New(c challenge.Challenge) Model {
+func New(c challenge.Challenge, par int) Model {
 	goalRow, goalCol := resolveGoalPosition(c)
 	return Model{
-		session:    session.New(c),
-		challenge:   c,
-		goalRow:     goalRow,
-		goalCol:     goalCol,
-		keystrokes:  make([]string, 0, maxKeystrokes),
+		session:    session.New(c, par),
+		challenge:  c,
+		goalRow:    goalRow,
+		goalCol:    goalCol,
+		keystrokes: make([]string, 0, maxKeystrokes),
 	}
 }
 
@@ -110,15 +117,41 @@ func displayKey(k string) string {
 	}
 }
 
+// starLine renders the star band for a result.
+func starLine(r session.Result) string {
+	var b strings.Builder
+	for i := 1; i <= 3; i++ {
+		if i <= r.Stars {
+			b.WriteString(starStyle.Render("★"))
+		} else {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444")).Render("☆"))
+		}
+	}
+	return b.String()
+}
+
 // View implements tea.Model.
 func (m Model) View() string {
 	state := m.session.State()
 	buf := state.Buffer
 	cur := state.Cursor
 
+	// --- Solved banner ---
 	var solvedLine string
 	if m.session.Solved() {
-		solvedLine = solvedStyle.Render("Solved!") + "\n\n"
+		solvedLine = solvedStyle.Render("Solved!") + "\n"
+		// Show par and stars
+		r := m.session.Result()
+		if r.Par >= 0 {
+			solvedLine += parInfoStyle.Render(
+				fmt.Sprintf("you %d — par %d", r.Keystrokes, r.Par),
+			) + "\n"
+		} else {
+			solvedLine += parInfoStyle.Render(
+				fmt.Sprintf("you %d", r.Keystrokes),
+			) + "\n"
+		}
+		solvedLine += starLine(r) + "\n\n"
 	}
 
 	// Render each line of the buffer with the cursor and target highlighted.
