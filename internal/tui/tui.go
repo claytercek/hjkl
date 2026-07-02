@@ -91,9 +91,6 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("#ff8"))
 
-	starStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#ff0"))
-
 	parInfoStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#aaa"))
 
@@ -112,12 +109,6 @@ var (
 	summaryLabelStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#ffa"))
-
-	bestLabelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#0a0"))
-
-	masteryLabelStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#fa0"))
 
 	// Wasted key shake
 	wasteBackground = lipgloss.NewStyle().
@@ -146,8 +137,6 @@ var (
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#666"))
 )
-
-var emptyStarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#444"))
 
 const maxKeystrokes = 20
 
@@ -415,7 +404,6 @@ func (m GameModel) ViewGame() string {
 				fmt.Sprintf("you %d", r.Keystrokes),
 			) + "\n"
 		}
-		solvedLine += starLine(r) + "\n\n"
 	}
 
 	// --- Hint display ---
@@ -961,15 +949,13 @@ func (m LessonModel) viewSummary() string {
 		tmplLabel := templateStyle.Render(tmplName)
 
 		var resultLine string
-		if r.Result.Keystrokes > 0 || r.Result.Stars > 0 {
+		if r.Result.Keystrokes > 0 {
 			if r.Result.Par >= 0 {
-				resultLine = fmt.Sprintf("  %s  %s\n  you %d — par %d  %s",
-					roundLabel, tmplLabel, r.Result.Keystrokes, r.Result.Par,
-					starLineShort(r.Result.Stars))
+				resultLine = fmt.Sprintf("  %s  %s\n  you %d — par %d",
+					roundLabel, tmplLabel, r.Result.Keystrokes, r.Result.Par)
 			} else {
-				resultLine = fmt.Sprintf("  %s  %s\n  you %d  %s",
-					roundLabel, tmplLabel, r.Result.Keystrokes,
-					starLineShort(r.Result.Stars))
+				resultLine = fmt.Sprintf("  %s  %s\n  you %d",
+					roundLabel, tmplLabel, r.Result.Keystrokes)
 			}
 		} else {
 			resultLine = fmt.Sprintf("  %s  %s  — not played", roundLabel, tmplLabel)
@@ -979,55 +965,11 @@ func (m LessonModel) viewSummary() string {
 
 	// Aggregate.
 	b.WriteString(summaryLabelStyle.Render("Total") + "\n")
-	totalLine := fmt.Sprintf("  keystrokes: %d  par: %d  stars: %d  %s",
-		summary.TotalKeystrokes, summary.TotalPar, summary.TotalStars,
-		summaryStars(summary.TotalStars))
+	totalLine := fmt.Sprintf("  keystrokes: %d  par: %d",
+		summary.TotalKeystrokes, summary.TotalPar)
 	b.WriteString(totalLine + "\n\n")
 
-	// Bests and mastery section.
-	b.WriteString(m.viewBestProgress())
-
 	b.WriteString(normalStyle.Render("Press q to quit."))
-	return b.String()
-}
-
-// viewBestProgress renders the historical bests and mastery section of the summary.
-func (m LessonModel) viewBestProgress() string {
-	if len(m.progress.BestScores) == 0 && len(m.progress.Mastery) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-	b.WriteString(summaryLabelStyle.Render("Progress") + "\n")
-
-	// Collect all motion keys present in progress.
-	keys := make(map[store.MotionKey]bool)
-	for k := range m.progress.BestScores {
-		keys[k] = true
-	}
-	for k := range m.progress.Mastery {
-		keys[k] = true
-	}
-
-	for key := range keys {
-		tmplLabel := templateStyle.Render(string(key))
-
-		// Best score line.
-		if bs, ok := m.progress.BestScores[key]; ok && bs.Stars > 0 {
-			bsLine := fmt.Sprintf("  %s  best: you %d — par %d  %s",
-				tmplLabel, bs.Keystrokes, bs.Par, starLineShort(bs.Stars))
-			b.WriteString(bestLabelStyle.Render(bsLine) + "\n")
-		}
-
-		// Mastery line.
-		if mv, ok := m.progress.Mastery[key]; ok && mv.Rounds > 0 {
-			pct := int(mv.Value * 100)
-			mvLine := fmt.Sprintf("  %s  mastery: %d%% (%d rounds)",
-				tmplLabel, pct, mv.Rounds)
-			b.WriteString(masteryLabelStyle.Render(mvLine) + "\n")
-		}
-	}
-	b.WriteString("\n")
 	return b.String()
 }
 
@@ -1065,33 +1007,6 @@ func displayKey(k string) string {
 	default:
 		return k
 	}
-}
-
-// starLine renders the star band for a result.
-func starLine(r session.Result) string {
-	var b strings.Builder
-	for i := 1; i <= 3; i++ {
-		if i <= r.Stars {
-			b.WriteString(starStyle.Render("★"))
-		} else {
-			b.WriteString(emptyStarStyle.Render("☆"))
-		}
-	}
-	return b.String()
-}
-
-// starLineShort renders a compact star band (no empty stars).
-func starLineShort(stars int) string {
-	var b strings.Builder
-	for i := 1; i <= stars; i++ {
-		b.WriteString(starStyle.Render("★"))
-	}
-	return b.String()
-}
-
-// summaryStars renders stars for the total.
-func summaryStars(total int) string {
-	return starStyle.Render(strings.Repeat("★", total))
 }
 
 // resolveGoalPosition finds the target cell that satisfies the goal
