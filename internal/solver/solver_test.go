@@ -140,6 +140,85 @@ func TestSolve_NoPendingLeakBetweenLevels(t *testing.T) {
 	}
 }
 
+func TestOptimalFromState_CustomState(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+	)
+
+	st := vim.State{Buffer: buffer("abc"), Cursor: vim.Cursor{Row: 0, Col: 1}, DesiredCol: -1}
+	got := OptimalFromState(st, c, []string{"l"}, 100)
+	if got != 1 {
+		t.Fatalf("OptimalFromState = %d, want 1", got)
+	}
+}
+
+func TestOptimalFromState_AlreadyAtGoal(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+	)
+
+	st := vim.State{Buffer: buffer("abc"), Cursor: vim.Cursor{Row: 0, Col: 2}, DesiredCol: -1}
+	got := OptimalFromState(st, c, []string{"l"}, 100)
+	if got != 0 {
+		t.Fatalf("OptimalFromState at goal = %d, want 0", got)
+	}
+}
+
+func TestFirstStepFromState_Simple(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+	)
+
+	st := vim.State{Buffer: buffer("abc"), Cursor: vim.Cursor{Row: 0, Col: 0}, DesiredCol: -1}
+	key, dist := FirstStepFromState(st, c, []string{"l"}, 100)
+	if key != "l" {
+		t.Fatalf("FirstStepFromState key = %q, want %q", key, "l")
+	}
+	if dist != 2 {
+		t.Fatalf("FirstStepFromState distance = %d, want 2", dist)
+	}
+}
+
+func TestFirstStepFromState_AlreadyAtGoal(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+	)
+
+	st := vim.State{Buffer: buffer("abc"), Cursor: vim.Cursor{Row: 0, Col: 2}, DesiredCol: -1}
+	key, dist := FirstStepFromState(st, c, []string{"l"}, 100)
+	if key != "" {
+		t.Fatalf("FirstStepFromState at goal key = %q, want empty", key)
+	}
+	if dist != 0 {
+		t.Fatalf("FirstStepFromState at goal distance = %d, want 0", dist)
+	}
+}
+
+func TestFirstStepFromState_Unsolvable(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 10),
+	)
+
+	st := vim.State{Buffer: buffer("abc"), Cursor: vim.Cursor{Row: 0, Col: 0}, DesiredCol: -1}
+	key, dist := FirstStepFromState(st, c, []string{"l"}, 10)
+	if key != "" {
+		t.Fatalf("FirstStepFromState unsolvable key = %q, want empty", key)
+	}
+	if dist != -1 {
+		t.Fatalf("FirstStepFromState unsolvable distance = %d, want -1", dist)
+	}
+}
+
 func TestSolve_VisitedStateDoesNotRevisit(t *testing.T) {
 	// Verifies that visited-state tracking prevents exponential blowup
 	// on a simple challenge where many paths lead to the same state.

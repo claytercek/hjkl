@@ -1,0 +1,721 @@
+package tui
+
+import (
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/clay/hjkl/internal/challenge"
+	"github.com/clay/hjkl/internal/curriculum"
+	"github.com/clay/hjkl/internal/vim"
+)
+
+// buffer is a shorthand for creating a Buffer with the given lines.
+func buffer(lines ...string) vim.Buffer {
+	return vim.Buffer{Lines: lines}
+}
+
+func TestDefaultConfig_HasBindings(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Bindings.Pause != "ctrl+c" {
+		t.Errorf("default pause key = %q, want ctrl+c", cfg.Bindings.Pause)
+	}
+	if cfg.Bindings.Hint != "ctrl+h" {
+		t.Errorf("default hint key = %q, want ctrl+h", cfg.Bindings.Hint)
+	}
+	if cfg.Bindings.Skip != "ctrl+n" {
+		t.Errorf("default skip key = %q, want ctrl+n", cfg.Bindings.Skip)
+	}
+}
+
+func TestNewLesson_StartsPlaying(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+	if m.state != statePlaying {
+		t.Fatalf("initial state = %d, want statePlaying", m.state)
+	}
+	if m.current != 0 {
+		t.Fatalf("initial current = %d, want 0", m.current)
+	}
+}
+
+func TestLessonModel_KeystrokeAdvancesSession(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Send an 'l' keystroke.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	updated := m2.(LessonModel)
+	if updated.game.session.State().Cursor.Col != 1 {
+		t.Fatalf("after l, cursor col = %d, want 1", updated.game.session.State().Cursor.Col)
+	}
+	if updated.state != statePlaying {
+		t.Fatalf("state = %d, want statePlaying", updated.state)
+	}
+
+	// Send another 'l' to solve.
+	m3, _ := updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	solved := m3.(LessonModel)
+	if !solved.game.Solved() {
+		t.Fatal("expected session to be solved after 2 l's")
+	}
+	if solved.state != stateSummary {
+		t.Fatalf("after final round solved, state = %d, want stateSummary", solved.state)
+	}
+}
+
+func TestLessonModel_SkipKey(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+			{
+				Challenge: challenge.New(
+					buffer("def"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 1),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Skip the first round.
+	cfg := DefaultConfig()
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+
+	// The Skip key is "ctrl+n" — we need to simulate it properly.
+	// In Bubble Tea, ctrl+n is represented as a KeyMsg with Type tea.KeyCtrlN.
+	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	skipped := m3.(LessonModel)
+
+	if skipped.state != statePlaying {
+		t.Fatalf("after skip, state = %d, want statePlaying", skipped.state)
+	}
+	if skipped.current != 1 {
+		t.Fatalf("after skip, current = %d, want 1", skipped.current)
+	}
+	_ = cfg // used for reference
+}
+
+func TestLessonModel_HintKey(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Press Ctrl-H to get hint.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	hinted := m2.(LessonModel)
+
+	if !hinted.game.hintVisible {
+		t.Fatal("expected hint to be visible after Ctrl-H")
+	}
+	if hinted.game.hintKey == "" {
+		t.Fatal("expected hintKey to be non-empty")
+	}
+}
+
+func TestLessonModel_PauseToggle(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Press Ctrl-C to pause.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(LessonModel)
+
+	if !paused.paused {
+		t.Fatal("expected paused to be true after Ctrl-C")
+	}
+	if paused.menuCursor != 0 {
+		t.Fatalf("menu cursor = %d, want 0", paused.menuCursor)
+	}
+
+	// Press Ctrl-C again to resume.
+	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	resumed := m3.(LessonModel)
+
+	if resumed.paused {
+		t.Fatal("expected paused to be false after second Ctrl-C")
+	}
+}
+
+func TestLessonModel_MenuNavigation(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Pause.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(LessonModel)
+
+	// Navigate down with 'j'.
+	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	down := m3.(LessonModel)
+
+	if down.menuCursor != 1 {
+		t.Fatalf("after j, menu cursor = %d, want 1", down.menuCursor)
+	}
+
+	// Navigate up with 'k'.
+	m4, _ := down.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	up := m4.(LessonModel)
+
+	if up.menuCursor != 0 {
+		t.Fatalf("after k, menu cursor = %d, want 0", up.menuCursor)
+	}
+
+	// Select Resume with Enter.
+	m5, _ := up.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	resumed := m5.(LessonModel)
+
+	if resumed.paused {
+		t.Fatal("expected paused to be false after Resume")
+	}
+}
+
+func TestLessonModel_EscNotIntercepted(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abcde"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Esc should be passed through to the game (no-op in vim step).
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	after := m2.(LessonModel)
+
+	if after.state != statePlaying {
+		t.Fatalf("after esc, state = %d, want statePlaying", after.state)
+	}
+	// Session should not have quit.
+	if after.game.Solved() {
+		t.Fatal("session should not be solved after esc")
+	}
+}
+
+func TestLessonModel_RetryMenuAction(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Solve the round.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	solved := m3.(LessonModel)
+
+	if solved.state != stateSummary {
+		t.Fatalf("single round solved should go to summary, got state %d", solved.state)
+	}
+
+	// Can't retry from summary directly, but verify the round result was recorded.
+	if solved.lesson.Rounds[0].Result.Keystrokes != 2 {
+		t.Fatalf("round result keystrokes = %d, want 2", solved.lesson.Rounds[0].Result.Keystrokes)
+	}
+}
+
+func TestLessonModel_AnimationsCreateTick(t *testing.T) {
+	// After a keystroke, there should be a tick command for animations.
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Press 'l' — should create ghosts and tick.
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	after := m2.(LessonModel)
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (tick) after keystroke")
+	}
+	if len(after.game.ghosts) == 0 {
+		t.Fatal("expected ghost trail after cursor move")
+	}
+}
+
+func TestGameModel_ReducedMotionNoGhosts(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+	)
+	gm := NewGame(c, DefaultBindings(), true) // reducedMotion = true
+
+	gm2, _ := gm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	after := gm2
+
+	if len(after.ghosts) > 0 {
+		t.Fatal("expected no ghosts in reduced motion mode")
+	}
+}
+
+func TestDisplayKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"h", "h"},
+		{"l", "l"},
+		{" ", "<space>"},
+		{"enter", "<cr>"},
+		{"tab", "<tab>"},
+		{"esc", "<esc>"},
+		{"ctrl+c", "Ctrl-C"},
+		{"ctrl+h", "Ctrl-H"},
+		{"ctrl+n", "Ctrl-N"},
+	}
+
+	for _, tt := range tests {
+		got := displayKey(tt.key)
+		if got != tt.want {
+			t.Errorf("displayKey(%q) = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
+
+func TestInterpolate(t *testing.T) {
+	buf := buffer("abcdef", "ghi")
+
+	tests := []struct {
+		name string
+		from vim.Cursor
+		to   vim.Cursor
+		want int // number of positions
+	}{
+		{
+			name: "horizontal right",
+			from: vim.Cursor{Row: 0, Col: 0},
+			to:   vim.Cursor{Row: 0, Col: 3},
+			want: 4, // cols 0,1,2,3
+		},
+		{
+			name: "horizontal left",
+			from: vim.Cursor{Row: 0, Col: 3},
+			to:   vim.Cursor{Row: 0, Col: 0},
+			want: 4, // cols 0,1,2,3
+		},
+		{
+			name: "vertical down",
+			from: vim.Cursor{Row: 0, Col: 1},
+			to:   vim.Cursor{Row: 1, Col: 1},
+			want: 2, // rows 0,1
+		},
+		{
+			name: "vertical up",
+			from: vim.Cursor{Row: 1, Col: 1},
+			to:   vim.Cursor{Row: 0, Col: 1},
+			want: 2, // rows 0,1
+		},
+		{
+			name: "no movement",
+			from: vim.Cursor{Row: 0, Col: 2},
+			to:   vim.Cursor{Row: 0, Col: 2},
+			want: 1, // same position
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := interpolate(tt.from, tt.to, buf)
+			if len(got) != tt.want {
+				t.Errorf("interpolate returned %d positions, want %d", len(got), tt.want)
+			}
+			// First and last should match from/to.
+			if got[0] != tt.from {
+				t.Errorf("first position = %v, want %v", got[0], tt.from)
+			}
+			if got[len(got)-1] != tt.to {
+				t.Errorf("last position = %v, want %v", got[len(got)-1], tt.to)
+			}
+		})
+	}
+}
+
+func TestViewGame_DoesNotCrash(t *testing.T) {
+	c := challenge.New(
+		buffer("hello world"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 6),
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+	_ = gm.ViewGame() // should not panic
+
+	// After a keystroke, view should also not panic.
+	gm2, _ := gm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
+	_ = gm2.ViewGame()
+}
+
+func TestLessonView_DoesNotCrash(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+	_ = m.View() // should not panic
+
+	// After solving.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	_ = m3.(LessonModel).View() // should not panic
+}
+
+func TestMenuView_DoesNotCrash(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Pause and view.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	paused := m2.(LessonModel)
+	_ = paused.View() // should not panic
+}
+
+func TestApplyKeystroke_WastedKeyDetection(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 0},
+		challenge.CursorAtTarget(0, 2),
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+
+	// A move that doesn't reduce optimal distance (e.g., 'h' when at col 0)
+	// should register as wasted.
+	gm.applyKeystroke("h")
+	if gm.wasteFrames <= 0 {
+		t.Fatal("expected wasteFrames > 0 after wasted key (h at col 0)")
+	}
+
+	// Reset for next test.
+	gm = NewGame(c, DefaultBindings(), false)
+	// A move that makes progress (l) should not be wasted.
+	gm.applyKeystroke("l")
+	if gm.wasteFrames > 0 {
+		t.Fatal("expected wasteFrames == 0 after progress key (l)")
+	}
+}
+
+func TestNewLessonWithConfig_CustomBindings(t *testing.T) {
+	cfg := Config{
+		Bindings: KeyBindings{
+			Pause: "ctrl+p",
+			Hint:  "ctrl+h",
+			Skip:  "ctrl+s",
+		},
+		ReducedMotion: true,
+	}
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLessonWithConfig(lesson, cfg)
+
+	if !m.config.ReducedMotion {
+		t.Fatal("expected ReducedMotion to be true")
+	}
+	if m.config.Bindings.Pause != "ctrl+p" {
+		t.Fatalf("Pause binding = %q, want ctrl+p", m.config.Bindings.Pause)
+	}
+	if m.config.Bindings.Skip != "ctrl+s" {
+		t.Fatalf("Skip binding = %q, want ctrl+s", m.config.Bindings.Skip)
+	}
+}
+
+func TestSkipRound_LastRoundGoesToSummary(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+	m.skipRound()
+
+	if m.state != stateSummary {
+		t.Fatalf("after skip on last round, state = %d, want stateSummary", m.state)
+	}
+	// Result should record a skip.
+	if m.lesson.Rounds[0].Result.Keystrokes != 0 {
+		t.Fatalf("skipped round keystrokes = %d, want 0", m.lesson.Rounds[0].Result.Keystrokes)
+	}
+}
+
+func TestRetryRound_ClearsResult(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Solve the round.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m3, _ := m2.(LessonModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	solved := m3.(LessonModel)
+
+	if solved.lesson.Rounds[0].Result.Keystrokes != 2 {
+		t.Fatalf("round result keystrokes = %d, want 2", solved.lesson.Rounds[0].Result.Keystrokes)
+	}
+
+	// Retry.
+	solved.retryRound()
+	if solved.lesson.Rounds[0].Result.Keystrokes != 0 {
+		t.Fatalf("after retry, round result keystrokes = %d, want 0", solved.lesson.Rounds[0].Result.Keystrokes)
+	}
+	if solved.state != statePlaying {
+		t.Fatalf("after retry, state = %d, want statePlaying", solved.state)
+	}
+}
+
+func TestRestartLesson_ClearsAllResults(t *testing.T) {
+	lesson := &curriculum.Lesson{
+		Rounds: []curriculum.Round{
+			{
+				Challenge: challenge.New(
+					buffer("abc"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 2),
+				),
+				Template: challenge.THorizontalLine,
+			},
+			{
+				Challenge: challenge.New(
+					buffer("def"),
+					vim.Cursor{Row: 0, Col: 0},
+					challenge.CursorAtTarget(0, 1),
+				),
+				Template: challenge.THorizontalLine,
+			},
+		},
+	}
+	m := NewLesson(lesson)
+
+	// Simulate playing and recording results.
+	m.lesson.Rounds[0].Result.Keystrokes = 3
+	m.lesson.Rounds[1].Result.Keystrokes = 2
+
+	m.restartLesson()
+	if m.lesson.Rounds[0].Result.Keystrokes != 0 {
+		t.Fatalf("after restart, round 0 keystrokes = %d, want 0", m.lesson.Rounds[0].Result.Keystrokes)
+	}
+	if m.lesson.Rounds[1].Result.Keystrokes != 0 {
+		t.Fatalf("after restart, round 1 keystrokes = %d, want 0", m.lesson.Rounds[1].Result.Keystrokes)
+	}
+	if m.current != 0 {
+		t.Fatalf("after restart, current = %d, want 0", m.current)
+	}
+}
+
+func TestAdvanceAnimations_DecrementsCounters(t *testing.T) {
+	gm := GameModel{
+		wasteFrames:   5,
+		successFrames: 10,
+		ghosts: []ghostPos{
+			{row: 0, col: 0, life: 3},
+			{row: 0, col: 1, life: 5},
+		},
+		reducedMotion: false,
+	}
+
+	active := gm.advanceAnimations()
+	if active <= 0 {
+		t.Fatal("expected active animations after advance")
+	}
+	if gm.wasteFrames != 4 {
+		t.Fatalf("wasteFrames = %d, want 4", gm.wasteFrames)
+	}
+	if gm.successFrames != 9 {
+		t.Fatalf("successFrames = %d, want 9", gm.successFrames)
+	}
+	// Ghost with life 3 should now be 2, life 5 should be 4.
+	if len(gm.ghosts) != 2 {
+		t.Fatalf("len(ghosts) = %d, want 2", len(gm.ghosts))
+	}
+	if gm.ghosts[0].life != 2 {
+		t.Fatalf("ghost[0].life = %d, want 2", gm.ghosts[0].life)
+	}
+}
+
+func TestAdvanceAnimations_RemovesExpiredGhosts(t *testing.T) {
+	gm := GameModel{
+		ghosts: []ghostPos{
+			{row: 0, col: 0, life: 1}, // will expire
+			{row: 0, col: 1, life: 2}, // will stay
+		},
+		reducedMotion: false,
+	}
+
+	gm.advanceAnimations()
+	if len(gm.ghosts) != 1 {
+		t.Fatalf("len(ghosts) after expiry = %d, want 1", len(gm.ghosts))
+	}
+	if gm.ghosts[0].col != 1 {
+		t.Fatalf("remaining ghost col = %d, want 1", gm.ghosts[0].col)
+	}
+}
+
+func TestGhostAt(t *testing.T) {
+	gm := GameModel{
+		ghosts: []ghostPos{
+			{row: 0, col: 0, life: 5},
+			{row: 0, col: 1, life: 3},
+		},
+	}
+
+	if life := gm.ghostAt(0, 0); life != 5 {
+		t.Fatalf("ghostAt(0,0) = %d, want 5", life)
+	}
+	if life := gm.ghostAt(0, 1); life != 3 {
+		t.Fatalf("ghostAt(0,1) = %d, want 3", life)
+	}
+	if life := gm.ghostAt(0, 2); life != 0 {
+		t.Fatalf("ghostAt(0,2) = %d, want 0", life)
+	}
+	if life := gm.ghostAt(1, 0); life != 0 {
+		t.Fatalf("ghostAt(1,0) = %d, want 0", life)
+	}
+}
+
+func TestGameModel_SolvedIgnoresKeystrokes(t *testing.T) {
+	c := challenge.New(
+		buffer("abc"),
+		vim.Cursor{Row: 0, Col: 2},
+		challenge.CursorAtTarget(0, 2),
+	)
+	gm := NewGame(c, DefaultBindings(), false)
+
+	if !gm.Solved() {
+		t.Fatal("expected solved immediately")
+	}
+
+	// Keystroke should be ignored.
+	gm2, _ := gm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	after := gm2
+	if after.session.State().Cursor.Col != 2 {
+		t.Fatalf("cursor should not move after solved, col = %d", after.session.State().Cursor.Col)
+	}
+}

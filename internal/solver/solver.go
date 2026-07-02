@@ -41,26 +41,31 @@ func toKey(s vim.State) stateKey {
 // predicate. If no solution exists within maxDepth it returns -1.
 func Solve(c challenge.Challenge, vocabulary []string, maxDepth int) int {
 	initial := vim.State{
-		Buffer:      c.InitialBuffer,
-		Cursor:      c.InitialCursor,
-		DesiredCol:  -1,
+		Buffer:     c.InitialBuffer,
+		Cursor:     c.InitialCursor,
+		DesiredCol: -1,
 	}
+	return OptimalFromState(initial, c, vocabulary, maxDepth)
+}
 
-	if c.Goal(initial) {
+// OptimalFromState returns the minimal keystrokes from the given state
+// to the goal. Returns -1 if unsolvable within maxDepth.
+func OptimalFromState(st vim.State, c challenge.Challenge, vocabulary []string, maxDepth int) int {
+	if c.Goal(st) {
 		return 0
 	}
 
-	visited := map[stateKey]bool{toKey(initial): true}
-	queue := []vim.State{initial}
+	visited := map[stateKey]bool{toKey(st): true}
+	queue := []vim.State{st}
 	depth := 0
 
 	for len(queue) > 0 && depth < maxDepth {
 		depth++
 		next := make([]vim.State, 0, len(queue)*len(vocabulary))
 
-		for _, st := range queue {
+		for _, s := range queue {
 			for _, k := range vocabulary {
-				ns := vim.Step(st, k)
+				ns := vim.Step(s, k)
 				key := toKey(ns)
 				if visited[key] {
 					continue
@@ -76,4 +81,53 @@ func Solve(c challenge.Challenge, vocabulary []string, maxDepth int) int {
 	}
 
 	return -1
+}
+
+// bfsNode tracks a state and the first keystroke from the origin state.
+type bfsNode struct {
+	state    vim.State
+	firstKey string // first keystroke from the original starting state
+}
+
+// FirstStepFromState returns the first keystroke of an optimal solution
+// from the given state, and the total optimal distance. Returns ("", -1)
+// if unsolvable within maxDepth, or ("", 0) if already at the goal.
+func FirstStepFromState(st vim.State, c challenge.Challenge, vocabulary []string, maxDepth int) (string, int) {
+	if c.Goal(st) {
+		return "", 0
+	}
+
+	visited := map[stateKey]bool{toKey(st): true}
+	queue := []bfsNode{{state: st, firstKey: ""}}
+	depth := 0
+
+	for len(queue) > 0 && depth < maxDepth {
+		depth++
+		next := make([]bfsNode, 0, len(queue)*len(vocabulary))
+
+		for _, n := range queue {
+			for _, k := range vocabulary {
+				ns := vim.Step(n.state, k)
+				key := toKey(ns)
+				if visited[key] {
+					continue
+				}
+				visited[key] = true
+
+				// Determine the first keystroke from the original start.
+				fk := k
+				if n.firstKey != "" {
+					fk = n.firstKey
+				}
+
+				if c.Goal(ns) {
+					return fk, depth
+				}
+				next = append(next, bfsNode{state: ns, firstKey: fk})
+			}
+		}
+		queue = next
+	}
+
+	return "", -1
 }
