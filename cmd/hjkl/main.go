@@ -1,4 +1,4 @@
-// Command hjkl launches the TUI for a hardcoded single-line challenge.
+// Command hjkl launches the TUI for a hardcoded multi-line challenge.
 package main
 
 import (
@@ -13,12 +13,15 @@ import (
 )
 
 func main() {
-	// Hardcoded single-line challenge: move cursor from column 0 to
-	// the target position.
+	// Hardcoded multi-line challenge: navigate to a target position.
 	c := challenge.New(
-		vim.Buffer{Lines: []string{"hello world"}},
+		vim.Buffer{Lines: []string{
+			"hello world",
+			"foo bar baz",
+			"lorem ipsum",
+		}},
 		vim.Cursor{Row: 0, Col: 0},
-		challenge.CursorAtTarget(0, 7), // the 'o' in "world"
+		challenge.CursorAtTarget(2, 6), // the 'i' in "ipsum"
 	)
 
 	p := tea.NewProgram(tui.New(c), tea.WithAltScreen())
