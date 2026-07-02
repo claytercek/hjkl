@@ -206,6 +206,12 @@ func NewChallengeStream(gen *challenge.Generator, rng *rand.Rand, cfg challenge.
 // Next generates a new challenge, weighted toward the frontier group.
 // The generator's vocabulary is restricted to unlocked motions.
 func (cs *ChallengeStream) Next(mastery map[string]float64) (challenge.Challenge, challenge.TemplateKind, error) {
+	return cs.nextWithRetries(mastery, 3)
+}
+
+// nextWithRetries is like Next but with a bounded retry budget for
+// challenges that aren't solvable with the restricted vocabulary.
+func (cs *ChallengeStream) nextWithRetries(mastery map[string]float64, retries int) (challenge.Challenge, challenge.TemplateKind, error) {
 	// Determine the frontier group.
 	frontierIdx, _ := curriculum.FrontierProgress(mastery)
 
@@ -255,34 +261,26 @@ func (cs *ChallengeStream) Next(mastery map[string]float64) (challenge.Challenge
 		}
 	}
 
-	// Build the unlocked vocabulary and restrict the generator.
+	// Build the unlocked vocabulary.
 	unlocked := curriculum.UnlockedVocabulary(mastery)
-	var prevVocab []string
-	if cs.gen != nil {
-		// Temporarily patch generator vocabulary. The Generator doesn't
-		// expose a setter, so we use the Challenge-level vocabulary for
-		// solver calls. The stored vocabulary is used by the solver
-		// but not by challenge generation itself.
-		prevVocab = challenge.NavigationVocabulary
-	}
 
-	// Generate using the unlocked vocabulary (replaces full vocabulary).
-	// We create a fresh challenge with limited solver vocabulary.
-	// Since the Generator stores its own vocabulary, we work around it
-	// by generating first, then solving with the restricted vocabulary.
+	// Generate a challenge using the generator's (full) vocabulary.
 	c, err := cs.gen.Generate(picked, cs.cfg)
 	if err != nil {
 		return challenge.Challenge{}, challenge.TemplateKind(0), fmt.Errorf("generate %s: %w", picked, err)
 	}
 
-	// If the unlocked vocabulary is smaller than the full set, re-solve
-	// with the restricted vocabulary to ensure solvability.
-	if len(unlocked) < len(prevVocab) {
+	// If the unlocked vocabulary is a strict subset of the full set,
+	// re-solve to verify solvability with only unlocked motions.
+	if len(unlocked) < len(challenge.NavigationVocabulary) {
 		par := cs.gen.Solver().Solve(c, unlocked, cs.gen.MaxDepth())
 		if par < 0 {
-			// Not solvable with unlocked motions — recurse (up to a limit).
-			// A simpler approach: just retry once.
-			return cs.Next(mastery)
+			// Not solvable with unlocked motions — retry if budget allows.
+			if retries > 0 {
+				return cs.nextWithRetries(mastery, retries-1)
+			}
+			return challenge.Challenge{}, challenge.TemplateKind(0),
+				fmt.Errorf("challenge not solvable with unlocked vocabulary after retries")
 		}
 		c.Par = par
 	}
@@ -720,11 +718,11 @@ func viewPauseOverlay(selected int) string {
 // StreamModel — orchestrates a continuous stream of challenges
 // ---------------------------------------------------------------------------
 
-// lessonState tracks where we are in the lesson flow.
-type lessonState int
+// streamState tracks where we are in the challenge stream.
+type streamState int
 
 const (
-	statePlaying            lessonState = iota // a challenge is in progress
+	statePlaying            streamState = iota // a challenge is in progress
 	stateUnlockInterstitial                    // showing unlock interstitial for a new motion group
 	stateIntroRound                            // playing the forced intro round for a newly unlocked group
 	stateSummary                               // showing session summary (on quit)
@@ -733,7 +731,7 @@ const (
 // StreamModel is the Bubble Tea model for a continuous challenge stream.
 type StreamModel struct {
 	game            GameModel
-	state           lessonState
+	state           streamState
 	currentTemplate challenge.TemplateKind
 
 	// Pause overlay

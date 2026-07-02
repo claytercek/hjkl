@@ -36,18 +36,13 @@ type Progress struct {
 
 // Config holds user preferences persisted in TOML.
 type Config struct {
-	// RoundsPerLesson is the number of rounds in a lesson.
-	RoundsPerLesson int `toml:"rounds_per_lesson"`
-
 	// Theme is an optional UI theme identifier.
 	Theme string `toml:"theme,omitempty"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
-	return Config{
-		RoundsPerLesson: 5,
-	}
+	return Config{}
 }
 
 // Store is the persistence interface for hjkl progress and config.

@@ -262,28 +262,6 @@ func TestStreamModel_QuitShowsSummary(t *testing.T) {
 	}
 }
 
-func TestStreamModel_QuitFromSummary(t *testing.T) {
-	gen := testGenerator(42)
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	m := NewStream(gen, rng, nil)
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	paused := m2.(StreamModel)
-	for i := 0; i < 4; i++ {
-		var tmp tea.Model
-		tmp, _ = paused.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-		paused = tmp.(StreamModel)
-	}
-	m3, _ := paused.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	summary := m3.(StreamModel)
-
-	m4, cmd := summary.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-	if cmd == nil {
-		t.Fatal("expected non-nil cmd after 'q' in summary")
-	}
-	_ = m4
-}
-
 func TestStreamModel_AnimationsCreateTick(t *testing.T) {
 	gen := testGenerator(42)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))

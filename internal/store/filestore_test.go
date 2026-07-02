@@ -220,24 +220,17 @@ func TestFileStore_ConfigLoadSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.RoundsPerLesson != 5 {
-		t.Fatalf("RoundsPerLesson = %d, want 5", cfg.RoundsPerLesson)
-	}
 
-	// Save custom.
-	cfg.RoundsPerLesson = 10
+	// Save and load back.
 	if err := fs.SaveConfig(cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
 
-	// Load back.
 	cfg2, err := fs.LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig after save: %v", err)
 	}
-	if cfg2.RoundsPerLesson != 10 {
-		t.Fatalf("RoundsPerLesson = %d, want 10", cfg2.RoundsPerLesson)
-	}
+	_ = cfg2
 }
 
 func TestFileStore_Paths(t *testing.T) {
@@ -331,9 +324,7 @@ func TestFileStore_ConfigMissingReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig should not error on missing file: %v", err)
 	}
-	if cfg.RoundsPerLesson != 5 {
-		t.Fatalf("RoundsPerLesson = %d, want 5", cfg.RoundsPerLesson)
-	}
+	_ = cfg
 }
 
 func TestFileStore_OldVersionResetCleanly(t *testing.T) {
@@ -378,7 +369,5 @@ func TestFileStore_CorruptConfigReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig should not error on corrupt file: %v", err)
 	}
-	if cfg.RoundsPerLesson != 5 {
-		t.Fatalf("RoundsPerLesson = %d, want 5", cfg.RoundsPerLesson)
-	}
+	_ = cfg
 }
