@@ -1,50 +1,33 @@
-// Command hjkl launches the TUI for a hardcoded multi-line challenge.
+// Command hjkl launches the TUI for a multi-round navigation lesson.
 package main
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/clay/hjkl/internal/challenge"
+	"github.com/clay/hjkl/internal/curriculum"
 	"github.com/clay/hjkl/internal/solver"
 	"github.com/clay/hjkl/internal/tui"
-	"github.com/clay/hjkl/internal/vim"
 )
 
 func main() {
-	// Hardcoded multi-line challenge: navigate to a target position.
-	c := challenge.New(
-		vim.Buffer{Lines: []string{
-			"hello world",
-			"foo bar baz",
-			"lorem ipsum",
-		}},
-		vim.Cursor{Row: 0, Col: 0},
-		challenge.CursorAtTarget(2, 6), // the 'i' in "ipsum"
-	)
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	// Compute optimal par for the full motion vocabulary.
-	vocabulary := []string{
-		"h", "j", "k", "l",
-		"0", "^", "$",
-		"w", "b", "e",
-		"W", "B", "E",
-		"f", "t", "F", "T", ";",
-		"g", "G",
-		// Include ASCII letters for f/t/F/T targets.
-		"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-		"n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-		// Include period for punctuation-heavy buffers.
-		".",
+	gen := challenge.NewGenerator(rng, challenge.SolverFunc(solver.Solve), nil, solver.DefaultMaxDepth)
+
+	lesson, err := curriculum.NewLesson(5, gen, challenge.DefaultConfig())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create lesson: %v\n", err)
+		os.Exit(1)
 	}
-	// Note: "g"+"g" is handled by BFS like any other two-step command:
-	// the first "g" sets Pending="g", the second "g" resolves to gg.
 
-	par := solver.Solve(c, vocabulary, solver.DefaultMaxDepth)
-
-	p := tea.NewProgram(tui.New(c, par), tea.WithAltScreen())
+	m := tui.NewLesson(lesson)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
