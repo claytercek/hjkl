@@ -12,6 +12,7 @@ import (
 	"github.com/clay/hjkl/internal/challenge"
 	"github.com/clay/hjkl/internal/curriculum"
 	"github.com/clay/hjkl/internal/solver"
+	"github.com/clay/hjkl/internal/store"
 	"github.com/clay/hjkl/internal/tui"
 )
 
@@ -26,7 +27,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := tui.NewLesson(lesson)
+	// Create the store for persisting progress.
+	st, err := store.NewFileStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create store: %v\n", err)
+		os.Exit(1)
+	}
+
+	m := tui.NewLesson(lesson, st)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

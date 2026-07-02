@@ -13,6 +13,7 @@ import (
 	"github.com/clay/hjkl/internal/challenge"
 	"github.com/clay/hjkl/internal/curriculum"
 	"github.com/clay/hjkl/internal/session"
+	"github.com/clay/hjkl/internal/store"
 	"github.com/clay/hjkl/internal/vim"
 )
 
@@ -58,6 +59,12 @@ var (
 	summaryLabelStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#ffa"))
+
+	bestLabelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#0a0"))
+
+	masteryLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#fa0"))
 )
 
 var emptyStarStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#444"))
@@ -228,20 +235,29 @@ const (
 
 // LessonModel is the Bubble Tea model for a multi-round lesson.
 type LessonModel struct {
-	lesson  *curriculum.Lesson
-	current int      // 0-based index of current round
-	game    GameModel // current round's game model
-	state   lessonState
+	lesson   *curriculum.Lesson
+	current  int           // 0-based index of current round
+	game     GameModel     // current round's game model
+	state    lessonState
+	store    store.Store
+	progress store.Progress // in-memory copy of progress (updated live)
 }
 
 // NewLesson creates a LessonModel from a curriculum.Lesson.
-func NewLesson(lesson *curriculum.Lesson) LessonModel {
+func NewLesson(lesson *curriculum.Lesson, s store.Store) LessonModel {
 	game := NewGame(lesson.Rounds[0].Challenge)
+
+	// Load persisted progress (best scores and mastery). If the store
+	// returns an error or empty data we get sensible defaults.
+	p, _ := s.LoadProgress()
+
 	return LessonModel{
-		lesson:  lesson,
-		current: 0,
-		game:    game,
-		state:   statePlaying,
+		lesson:   lesson,
+		current:  0,
+		game:     game,
+		state:    statePlaying,
+		store:    s,
+		progress: p,
 	}
 }
 
@@ -256,6 +272,8 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			// Save progress before quitting.
+			m.saveProgress()
 			return m, tea.Quit
 		case " ", "enter":
 			if m.state == stateRoundDone {
@@ -271,15 +289,23 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Check if the round just completed.
 			if m.game.Solved() {
-				// Record the result on the lesson round.
 				r := m.game.Result()
+
+				// Record the result on the lesson round.
 				m.lesson.Rounds[m.current].Result = curriculum.Result{
 					Keystrokes: r.Keystrokes,
 					Par:        r.Par,
 					Stars:      r.Stars,
 				}
+
+				// Update persisted progress (best score + mastery).
+				tmplName := m.lesson.Rounds[m.current].Template.String()
+				m.updateProgress(tmplName, r)
+
 				if m.current >= len(m.lesson.Rounds)-1 {
 					m.state = stateSummary
+					// Save progress on lesson completion.
+					m.saveProgress()
 				} else {
 					m.state = stateRoundDone
 				}
@@ -289,6 +315,26 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// updateProgress updates the in-memory progress with the round result.
+func (m *LessonModel) updateProgress(tmplName string, r session.Result) {
+	key := store.MotionKey(tmplName)
+
+	// Update best score.
+	current := m.progress.BestScores[key]
+	m.progress.BestScores[key] = store.UpdateBestScore(current, r.Keystrokes, r.Par, r.Stars)
+
+	// Update mastery EWMA.
+	prev := m.progress.Mastery[key]
+	m.progress.Mastery[key] = store.UpdateMastery(prev, r.Keystrokes, r.Par, r.Stars, store.DefaultAlpha)
+}
+
+// saveProgress persists the current in-memory progress through the store.
+func (m *LessonModel) saveProgress() {
+	if m.store != nil {
+		_ = m.store.SaveProgress(m.progress)
+	}
 }
 
 // advanceToNextRound creates the game model for the next round.
@@ -398,8 +444,51 @@ func (m LessonModel) viewSummary() string {
 		summary.TotalKeystrokes, summary.TotalPar, summary.TotalStars,
 		summaryStars(summary.TotalStars))
 	b.WriteString(totalLine + "\n\n")
-	b.WriteString(normalStyle.Render("Press q to quit."))
 
+	// Bests and mastery section.
+	b.WriteString(m.viewBestProgress())
+
+	b.WriteString(normalStyle.Render("Press q to quit."))
+	return b.String()
+}
+
+// viewBestProgress renders the historical bests and mastery section of the summary.
+func (m LessonModel) viewBestProgress() string {
+	if len(m.progress.BestScores) == 0 && len(m.progress.Mastery) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(summaryLabelStyle.Render("Progress") + "\n")
+
+	// Collect all motion keys present in progress.
+	keys := make(map[store.MotionKey]bool)
+	for k := range m.progress.BestScores {
+		keys[k] = true
+	}
+	for k := range m.progress.Mastery {
+		keys[k] = true
+	}
+
+	for key := range keys {
+		tmplLabel := templateStyle.Render(string(key))
+
+		// Best score line.
+		if bs, ok := m.progress.BestScores[key]; ok && bs.Stars > 0 {
+			bsLine := fmt.Sprintf("  %s  best: you %d — par %d  %s",
+				tmplLabel, bs.Keystrokes, bs.Par, starLineShort(bs.Stars))
+			b.WriteString(bestLabelStyle.Render(bsLine) + "\n")
+		}
+
+		// Mastery line.
+		if mv, ok := m.progress.Mastery[key]; ok && mv.Rounds > 0 {
+			pct := int(mv.Value * 100)
+			mvLine := fmt.Sprintf("  %s  mastery: %d%% (%d rounds)",
+				tmplLabel, pct, mv.Rounds)
+			b.WriteString(masteryLabelStyle.Render(mvLine) + "\n")
+		}
+	}
+	b.WriteString("\n")
 	return b.String()
 }
 
