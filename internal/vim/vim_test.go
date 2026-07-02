@@ -30,7 +30,7 @@ func TestStep_h(t *testing.T) {
 			wantCol:   0,
 		},
 		{
-			name:      "h at column 0 from right edge after multiple hs",
+			name:      "h moves left from end of line",
 			initial:   State{Buffer: Buffer{Lines: []string{"ab"}}, Cursor: Cursor{Row: 0, Col: 1}},
 			wantRow:   0,
 			wantCol:   0,

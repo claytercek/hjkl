@@ -33,15 +33,20 @@ var (
 
 // Model is the Bubble Tea model for the hjkl TUI.
 type Model struct {
-	session  *session.Session
-	challenge challenge.Challenge
+	session   *session.Session
+	challenge  challenge.Challenge
+	goalRow    int
+	goalCol    int
 }
 
 // New creates a new Model for the given Challenge.
 func New(c challenge.Challenge) Model {
+	goalRow, goalCol := resolveGoalPosition(c)
 	return Model{
-		session:  session.New(c),
-		challenge: c,
+		session:   session.New(c),
+		challenge:  c,
+		goalRow:    goalRow,
+		goalCol:    goalCol,
 	}
 }
 
@@ -81,7 +86,7 @@ func (m Model) View() string {
 
 	// Render each line of the buffer with the cursor highlighted.
 	var content string
-	targetRow, targetCol := targetPosition(m.challenge)
+	targetRow, targetCol := m.goalRow, m.goalCol
 
 	for row, line := range buf.Lines {
 		for col, ch := range line {
@@ -90,9 +95,6 @@ func (m Model) View() string {
 			atTarget := row == targetRow && col == targetCol
 
 			switch {
-			case atCursor && atTarget:
-				// Highlight cursor overrides when both at same spot
-				content += cursorStyle.Render(cell)
 			case atCursor:
 				content += cursorStyle.Render(cell)
 			case atTarget:
@@ -119,21 +121,14 @@ func (m Model) View() string {
 	return fmt.Sprintf("%s%s\n%s", solvedLine, content, prompt)
 }
 
-// targetPosition extracts the target row/col from the challenge's goal
-// predicate by building the initial state and checking it.
-// This is a bit hacky for now — in a fuller implementation the Challenge
-// would carry target metadata directly.
-func targetPosition(c challenge.Challenge) (int, int) {
-	// We scan from the initial state forward; for the walking skeleton
-	// we know the target is just the cursor-at-target predicate.
-	// Since we can't inspect the closure, we brute-force by trying
-	// each cell to find which one satisfies the goal.
+// resolveGoalPosition finds the target cell that satisfies the goal
+// predicate. For the walking skeleton the only goal type is
+// cursor-at-target, so we walk the buffer once at startup to locate it.
+func resolveGoalPosition(c challenge.Challenge) (int, int) {
 	initState := vim.State{Buffer: c.InitialBuffer, Cursor: c.InitialCursor}
-	// Check initial position first (unlikely but possible).
 	if c.Goal(initState) {
 		return initState.Cursor.Row, initState.Cursor.Col
 	}
-	// Walk all positions to find the target.
 	for row := range initState.Buffer.Lines {
 		for col := range initState.Buffer.Lines[row] {
 			s := vim.State{Buffer: initState.Buffer, Cursor: vim.Cursor{Row: row, Col: col}}
