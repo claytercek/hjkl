@@ -427,7 +427,12 @@ func (g *Generator) genFindChar(cfg Config) (Challenge, error) {
 		if minIdx >= len(positions) {
 			minIdx = len(positions) - 1
 		}
-		targetIdx = minIdx + g.rng.Intn(len(positions)-minIdx)
+		n := len(positions) - minIdx
+		if n <= 0 {
+			targetIdx = minIdx
+		} else {
+			targetIdx = minIdx + g.rng.Intn(n)
+		}
 		if targetIdx >= len(positions) {
 			targetIdx = len(positions) - 1
 		}
@@ -436,7 +441,10 @@ func (g *Generator) genFindChar(cfg Config) (Challenge, error) {
 	targetCol := positions[targetIdx]
 
 	// Pick a start position before the target occurrence.
-	startCol := g.rng.Intn(targetCol)
+	var startCol int
+	if targetCol > 0 {
+		startCol = g.rng.Intn(targetCol)
+	}
 	if targetCol-startCol < cfg.MinDistance {
 		if targetCol > cfg.MinDistance {
 			startCol = targetCol - cfg.MinDistance
