@@ -63,6 +63,10 @@ func (f *FileStore) Paths() (string, string) {
 
 // LoadProgress reads the progress JSON file. If the file doesn't exist,
 // is empty, or is corrupt, it returns an empty Progress with no error.
+//
+// Progress files with an older schema version (e.g. version 1 with
+// template-keyed data) are treated as empty — a clean reset with no
+// migration.
 func (f *FileStore) LoadProgress() (Progress, error) {
 	data, err := os.ReadFile(f.progressPath)
 	if err != nil {
@@ -83,11 +87,17 @@ func (f *FileStore) LoadProgress() (Progress, error) {
 		return NewProgress(), nil
 	}
 
+	// Schema mismatch (e.g. old version 1 with template-keyed data):
+	// reset cleanly, no migration.
+	if p.Version != 2 {
+		return NewProgress(), nil
+	}
+
 	if p.BestScores == nil {
-		p.BestScores = make(map[MotionKey]BestScore)
+		p.BestScores = make(map[GroupKey]BestScore)
 	}
 	if p.Mastery == nil {
-		p.Mastery = make(map[MotionKey]Mastery)
+		p.Mastery = make(map[GroupKey]Mastery)
 	}
 
 	return p, nil

@@ -6,18 +6,17 @@ package store
 
 import "time"
 
-// MotionKey identifies a motion type (e.g. "horizontal-line",
-// "vertical-navigation", "find-character").
-type MotionKey string
+// GroupKey identifies a motion group (e.g. "hjkl", "wbe", "ft;").
+type GroupKey string
 
-// BestScore holds the best result ever achieved for a motion type.
+// BestScore holds the best result ever achieved for a motion group.
 type BestScore struct {
 	Keystrokes int `json:"keystrokes"`
 	Par        int `json:"par"`
 	Stars      int `json:"stars"`
 }
 
-// Mastery tracks proficiency for a motion type using an exponentially-
+// Mastery tracks proficiency for a motion group using an exponentially-
 // weighted moving average of efficiency (keystrokes vs par) and speed.
 //
 //	Value ∈ [0, 1] where 1 = perfect.
@@ -30,9 +29,9 @@ type Mastery struct {
 
 // Progress is the complete set of persisted progress data.
 type Progress struct {
-	Version    int                  `json:"version"`    // schema version for forward compat
-	BestScores map[MotionKey]BestScore `json:"best_scores,omitempty"`
-	Mastery    map[MotionKey]Mastery   `json:"mastery,omitempty"`
+	Version    int                `json:"version"`    // schema version for forward compat
+	BestScores map[GroupKey]BestScore `json:"best_scores,omitempty"`
+	Mastery    map[GroupKey]Mastery   `json:"mastery,omitempty"`
 }
 
 // Config holds user preferences persisted in TOML.
@@ -77,8 +76,8 @@ type Store interface {
 // NewProgress returns an initialised Progress with empty maps.
 func NewProgress() Progress {
 	return Progress{
-		Version:    1,
-		BestScores: make(map[MotionKey]BestScore),
-		Mastery:    make(map[MotionKey]Mastery),
+		Version:    2,
+		BestScores: make(map[GroupKey]BestScore),
+		Mastery:    make(map[GroupKey]Mastery),
 	}
 }

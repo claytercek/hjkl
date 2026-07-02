@@ -125,13 +125,13 @@ func TestFileStore_LoadSaveProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProgress: %v", err)
 	}
-	if p.Version != 1 {
-		t.Fatalf("Version = %d, want 1", p.Version)
+	if p.Version != 2 {
+		t.Fatalf("Version = %d, want 2", p.Version)
 	}
 
 	// Save some progress.
-	p.BestScores["horizontal-line"] = BestScore{Keystrokes: 3, Par: 3, Stars: 3}
-	p.Mastery["horizontal-line"] = Mastery{Value: 0.9, Rounds: 5, LastPlayed: time.Now()}
+	p.BestScores["hjkl"] = BestScore{Keystrokes: 3, Par: 3, Stars: 3}
+	p.Mastery["hjkl"] = Mastery{Value: 0.9, Rounds: 5, LastPlayed: time.Now()}
 	if err := fs.SaveProgress(p); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
@@ -141,11 +141,11 @@ func TestFileStore_LoadSaveProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProgress after save: %v", err)
 	}
-	if p2.BestScores["horizontal-line"].Keystrokes != 3 {
-		t.Fatalf("BestScore.Keystrokes = %d, want 3", p2.BestScores["horizontal-line"].Keystrokes)
+	if p2.BestScores["hjkl"].Keystrokes != 3 {
+		t.Fatalf("BestScore.Keystrokes = %d, want 3", p2.BestScores["hjkl"].Keystrokes)
 	}
-	if p2.Mastery["horizontal-line"].Rounds != 5 {
-		t.Fatalf("Mastery.Rounds = %d, want 5", p2.Mastery["horizontal-line"].Rounds)
+	if p2.Mastery["hjkl"].Rounds != 5 {
+		t.Fatalf("Mastery.Rounds = %d, want 5", p2.Mastery["hjkl"].Rounds)
 	}
 }
 
@@ -167,8 +167,8 @@ func TestFileStore_CorruptProgressReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProgress should not error on corrupt file: %v", err)
 	}
-	if p.Version != 1 {
-		t.Fatalf("Version = %d, want 1 (default)", p.Version)
+	if p.Version != 2 {
+		t.Fatalf("Version = %d, want 2 (default)", p.Version)
 	}
 }
 
@@ -183,8 +183,8 @@ func TestFileStore_MissingProgressReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProgress should not error on missing file: %v", err)
 	}
-	if p.Version != 1 {
-		t.Fatalf("Version = %d, want 1", p.Version)
+	if p.Version != 2 {
+		t.Fatalf("Version = %d, want 2", p.Version)
 	}
 }
 
@@ -203,8 +203,8 @@ func TestFileStore_EmptyProgressReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProgress should not error on empty file: %v", err)
 	}
-	if p.Version != 1 {
-		t.Fatalf("Version = %d, want 1", p.Version)
+	if p.Version != 2 {
+		t.Fatalf("Version = %d, want 2", p.Version)
 	}
 }
 
@@ -277,9 +277,9 @@ func TestFileStore_RoundTrip(t *testing.T) {
 	}
 
 	// Save.
-	p.BestScores["horizontal-line"] = BestScore{Keystrokes: 3, Par: 3, Stars: 3}
+	p.BestScores["hjkl"] = BestScore{Keystrokes: 3, Par: 3, Stars: 3}
 	m := UpdateMastery(Mastery{}, 5, 5, 3, DefaultAlpha)
-	p.Mastery["vertical-navigation"] = m
+	p.Mastery["hjkl"] = m
 	if err := fs.SaveProgress(p); err != nil {
 		t.Fatalf("SaveProgress: %v", err)
 	}
@@ -295,11 +295,11 @@ func TestFileStore_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second LoadProgress: %v", err)
 	}
-	if p2.BestScores["horizontal-line"].Stars != 3 {
-		t.Errorf("best score stars = %d, want 3", p2.BestScores["horizontal-line"].Stars)
+	if p2.BestScores["hjkl"].Stars != 3 {
+		t.Errorf("best score stars = %d, want 3", p2.BestScores["hjkl"].Stars)
 	}
-	if p2.Mastery["vertical-navigation"].Rounds != 1 {
-		t.Errorf("mastery rounds = %d, want 1", p2.Mastery["vertical-navigation"].Rounds)
+	if p2.Mastery["hjkl"].Rounds != 1 {
+		t.Errorf("mastery rounds = %d, want 1", p2.Mastery["hjkl"].Rounds)
 	}
 }
 
@@ -333,6 +333,34 @@ func TestFileStore_ConfigMissingReturnsDefaults(t *testing.T) {
 	}
 	if cfg.RoundsPerLesson != 5 {
 		t.Fatalf("RoundsPerLesson = %d, want 5", cfg.RoundsPerLesson)
+	}
+}
+
+func TestFileStore_OldVersionResetCleanly(t *testing.T) {
+	dir := t.TempDir()
+	progressPath := filepath.Join(dir, "progress.json")
+
+	// Write old-format progress (version 1, template-keyed).
+	oldData := `{"version":1,"best_scores":{"horizontal-line":{"keystrokes":3,"par":3,"stars":3}},"mastery":{"horizontal-line":{"value":0.9,"rounds":5}}}`
+	if err := os.WriteFile(progressPath, []byte(oldData), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := NewFileStoreWithPaths(filepath.Join(dir, "config.toml"), progressPath)
+
+	p, err := fs.LoadProgress()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	// Should be a clean reset: version 2, empty maps.
+	if p.Version != 2 {
+		t.Fatalf("Version = %d, want 2", p.Version)
+	}
+	if len(p.BestScores) != 0 {
+		t.Fatalf("BestScores = %+v, want empty after reset", p.BestScores)
+	}
+	if len(p.Mastery) != 0 {
+		t.Fatalf("Mastery = %+v, want empty after reset", p.Mastery)
 	}
 }
 

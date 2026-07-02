@@ -602,10 +602,10 @@ func newLesson(lesson *curriculum.Lesson, cfg Config, s store.Store) LessonModel
 	}
 	// Ensure maps are never nil so updateProgress can write to them.
 	if p.BestScores == nil {
-		p.BestScores = make(map[store.MotionKey]store.BestScore)
+		p.BestScores = make(map[store.GroupKey]store.BestScore)
 	}
 	if p.Mastery == nil {
-		p.Mastery = make(map[store.MotionKey]store.Mastery)
+		p.Mastery = make(map[store.GroupKey]store.Mastery)
 	}
 	return LessonModel{
 		lesson:   lesson,
@@ -720,8 +720,8 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				// Update persisted progress (best score + mastery).
-				tmplName := m.lesson.Rounds[m.current].Template.String()
-				m.updateProgress(tmplName, r)
+				groupKey := curriculum.GroupForTemplate(m.lesson.Rounds[m.current].Template)
+				m.updateProgress(groupKey, r)
 
 				if m.current >= len(m.lesson.Rounds)-1 {
 					m.state = stateSummary
@@ -739,8 +739,8 @@ func (m LessonModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateProgress updates the in-memory progress with the round result.
-func (m *LessonModel) updateProgress(tmplName string, r session.Result) {
-	key := store.MotionKey(tmplName)
+func (m *LessonModel) updateProgress(groupKey string, r session.Result) {
+	key := store.GroupKey(groupKey)
 
 	// Update best score.
 	current := m.progress.BestScores[key]
