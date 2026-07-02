@@ -1,6 +1,7 @@
 package curriculum_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/clay/hjkl/internal/challenge"
@@ -140,4 +141,104 @@ func TestGroupForTemplate_PanicsOnUnknown(t *testing.T) {
 		}
 	}()
 	curriculum.GroupForTemplate(challenge.TemplateKind(999))
+}
+
+func TestFrontierProgress_NoMastery(t *testing.T) {
+	// No mastery data yet — first unlockable group (wbe) is the frontier.
+	mastery := map[string]float64{}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != 1 {
+		t.Fatalf("frontierIdx = %d, want 1", idx)
+	}
+	if ratio != 0.0 {
+		t.Fatalf("ratio = %f, want 0.0", ratio)
+	}
+}
+
+func TestFrontierProgress_PartialMastery(t *testing.T) {
+	// wbe at 0.35 / 0.7 = 0.5 ratio
+	mastery := map[string]float64{"wbe": 0.35}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != 1 {
+		t.Fatalf("frontierIdx = %d, want 1", idx)
+	}
+	if math.Abs(ratio-0.5) > 1e-9 {
+		t.Fatalf("ratio = %f, want 0.5", ratio)
+	}
+}
+
+func TestFrontierProgress_FirstGroupUnlocked(t *testing.T) {
+	// wbe is at threshold, so 0^$ is the frontier (with 0 mastery).
+	mastery := map[string]float64{"wbe": 0.7}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != 2 {
+		t.Fatalf("frontierIdx = %d, want 2", idx)
+	}
+	if ratio != 0.0 {
+		t.Fatalf("ratio = %f, want 0.0", ratio)
+	}
+}
+
+func TestFrontierProgress_MultipleUnlocked(t *testing.T) {
+	mastery := map[string]float64{"wbe": 0.8, "0^$": 0.75, "ft;": 0.3}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != 3 {
+		t.Fatalf("frontierIdx = %d, want 3", idx)
+	}
+	expected := 0.3 / 0.7
+	if math.Abs(ratio-expected) > 1e-9 {
+		t.Fatalf("ratio = %f, want %f", ratio, expected)
+	}
+}
+
+func TestFrontierProgress_AllUnlocked(t *testing.T) {
+	mastery := map[string]float64{
+		"wbe": 0.8,
+		"0^$": 0.75,
+		"ft;": 0.9,
+		"ggG": 0.85,
+		"WBE": 0.95,
+	}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != -1 {
+		t.Fatalf("frontierIdx = %d, want -1", idx)
+	}
+	if ratio != 1.0 {
+		t.Fatalf("ratio = %f, want 1.0", ratio)
+	}
+}
+
+func TestFrontierProgress_ExactThreshold(t *testing.T) {
+	// Exactly at threshold counts as unlocked.
+	mastery := map[string]float64{"wbe": 0.7}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != 2 {
+		t.Fatalf("frontierIdx = %d, want 2 (skip wbe at threshold)", idx)
+	}
+	if ratio != 0.0 {
+		t.Fatalf("ratio = %f, want 0.0", ratio)
+	}
+}
+
+func TestFrontierProgress_AboveThreshold(t *testing.T) {
+	mastery := map[string]float64{"wbe": 0.9}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != 2 {
+		t.Fatalf("frontierIdx = %d, want 2", idx)
+	}
+	if ratio != 0.0 {
+		t.Fatalf("ratio = %f, want 0.0", ratio)
+	}
+}
+
+func TestFrontierProgress_NearThreshold(t *testing.T) {
+	mastery := map[string]float64{"wbe": 0.65}
+	idx, ratio := curriculum.FrontierProgress(mastery)
+	if idx != 1 {
+		t.Fatalf("frontierIdx = %d, want 1", idx)
+	}
+	expected := 0.65 / 0.7
+	if math.Abs(ratio-expected) > 1e-9 {
+		t.Fatalf("ratio = %f, want %f", ratio, expected)
+	}
 }

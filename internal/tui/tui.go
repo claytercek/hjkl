@@ -142,6 +142,12 @@ var (
 	// Footer
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#666"))
+
+	// Unlock progress bar
+	unlockBarFilledStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#556"))
+	unlockBarEmptyStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#223"))
 )
 
 const maxKeystrokes = 20
@@ -890,6 +896,7 @@ func (m LessonModel) viewPlaying() string {
 		goalLine = normalStyle.Render("Move cursor to the yellow target.")
 	}
 
+	unlockBar := m.renderUnlockProgress()
 	footer := m.renderFooter()
 
 	parts := []string{
@@ -899,9 +906,11 @@ func (m LessonModel) viewPlaying() string {
 		gameView,
 		"",
 		goalLine,
-		"",
-		footer,
 	}
+	if unlockBar != "" {
+		parts = append(parts, "", unlockBar)
+	}
+	parts = append(parts, "", footer)
 	return strings.Join(parts, "\n")
 }
 
@@ -993,6 +1002,37 @@ func (m LessonModel) renderFooter() string {
 	pauseLabel := fmt.Sprintf("%s: Menu", displayKey(b.Pause))
 
 	return footerStyle.Render(strings.Join([]string{retryLabel, hintLabel, skipLabel, pauseLabel}, "  |  "))
+}
+
+// renderUnlockProgress renders a thin progress bar toward the next unlock.
+// It returns an empty string when all Motion Groups are unlocked.
+func (m LessonModel) renderUnlockProgress() string {
+	_, ratio := curriculum.FrontierProgress(m.masteryFloatMap())
+	if ratio >= 1.0 {
+		return ""
+	}
+
+	const barLen = 10
+	filled := int(ratio * barLen)
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > barLen {
+		filled = barLen
+	}
+
+	return unlockBarFilledStyle.Render(strings.Repeat("▰", filled)) +
+		unlockBarEmptyStyle.Render(strings.Repeat("▰", barLen-filled))
+}
+
+// masteryFloatMap extracts float64 mastery values from the progress map,
+// keyed by group key, for use with curriculum.FrontierProgress.
+func (m LessonModel) masteryFloatMap() map[string]float64 {
+	result := make(map[string]float64, len(m.progress.Mastery))
+	for k, v := range m.progress.Mastery {
+		result[string(k)] = v.Value
+	}
+	return result
 }
 
 // ---------------------------------------------------------------------------

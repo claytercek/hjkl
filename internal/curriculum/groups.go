@@ -92,6 +92,33 @@ func GroupForTemplate(tmpl challenge.TemplateKind) string {
 	}
 }
 
+// MasteryThreshold is the mastery value at which a Motion Group is considered
+// unlocked, making the next group the new frontier.
+const MasteryThreshold = 0.7
+
+// FrontierProgress returns the index of the frontier group (the first
+// group whose mastery is below the threshold), and the ratio of its
+// current mastery to the threshold as a value in [0.0, 1.0].
+//
+// If all groups are unlocked (mastery >= threshold), frontierIdx is -1
+// and ratio is 1.0.
+func FrontierProgress(mastery map[string]float64) (frontierIdx int, ratio float64) {
+	// Groups[0] is the starting vocabulary, always unlocked.
+	// Start checking from index 1.
+	for i := 1; i < len(Groups); i++ {
+		val := mastery[Groups[i].Key]
+		if val < MasteryThreshold {
+			// This is the frontier group.
+			p := val / MasteryThreshold
+			if p > 1.0 {
+				p = 1.0
+			}
+			return i, p
+		}
+	}
+	return -1, 1.0
+}
+
 // GroupForMotion returns the MotionGroup that the given motion key belongs to,
 // or nil if the motion is not part of any authored group (e.g. target
 // characters for f/t).
